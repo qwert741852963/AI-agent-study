@@ -548,6 +548,240 @@ chain = first_prompt | model | (lambda ai_msg: {"name": ai_msg.content}) | secon
 
 ---
 
+
+
+## 五、文本分割器(Text Splitters)
+
+### 1. `CharacterTextSplitter` (字符文本分割器)
+
+这是最基础的分割器，它会根据一个**指定的字符序列**（默认是 `"\n\n"`）来分割文本，并按**字符数**计算块大小。
+
+```python
+from langchain_text_splitters import CharacterTextSplitter
+
+# 1. 加载你的文档
+with open("state_of_the_union.txt") as f:
+    state_of_the_union = f.read()
+
+# 2. 创建分割器实例
+text_splitter = CharacterTextSplitter(
+    separator="\n\n",        # 指定分隔符，默认为 "\n\n"
+    chunk_size=1000,         # 每个块的最大字符数
+    chunk_overlap=200,       # 块之间的重叠字符数
+    length_function=len,     # 计算文本长度的函数
+    is_separator_regex=False # 是否将分隔符解释为正则表达式
+)
+
+# 3. 执行分割
+
+# 方法一：返回 LangChain Document 对象列表（可携带元数据）
+documents = text_splitter.create_documents([state_of_the_union])
+print(documents[0])
+
+# 方法二：直接返回纯文本字符串列表
+texts = text_splitter.split_text(state_of_the_union)
+print(texts[0])
+```
+
+### 2. `RecursiveCharacterTextSplitter` (递归字符文本分割器)
+
+这是**官方推荐**的通用分割器。它会按优先级顺序尝试用一个**字符列表**（默认为 `["\n\n", "\n", " ", ""]`）进行分割，优先保持段落、句子等较大语义单元的完整。
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# 1. 加载你的文档
+with open("state_of_the_union.txt") as f:
+    state_of_the_union = f.read()
+
+# 2. 创建分割器实例
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=100,          # 每个块的最大字符数
+    chunk_overlap=20,        # 块之间的重叠字符数
+    length_function=len,     # 计算文本长度的函数
+    is_separator_regex=False # 是否将分隔符列表解释为正则表达式
+)
+
+# 3. 执行分割
+texts = text_splitter.split_text(state_of_the_union)
+print(texts[0])
+```
+
+### 3. 代码文本分割器 (Code Text Splitter)
+
+这是 `RecursiveCharacterTextSplitter` 的一个特化版本，针对特定编程语言提供了优化的分隔符列表，能更好地保持代码结构。
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+
+# Python 代码示例
+PYTHON_CODE = """
+def hello_world():
+    print("Hello, World!")
+# Call the function
+hello_world()
+"""
+
+# 创建针对 Python 优化的分割器
+python_splitter = RecursiveCharacterTextSplitter.from_language(
+    language=Language.PYTHON,
+    chunk_size=50,
+    chunk_overlap=0
+)
+python_docs = python_splitter.create_documents([PYTHON_CODE])
+print(python_docs)
+
+# JavaScript 代码示例
+JS_CODE = """
+function helloWorld() {
+  console.log("Hello, World!");
+}
+// Call the function
+helloWorld();
+"""
+js_splitter = RecursiveCharacterTextSplitter.from_language(
+    language=Language.JS,
+    chunk_size=60,
+    chunk_overlap=0
+)
+js_docs = js_splitter.create_documents([JS_CODE])
+print(js_docs)
+```
+
+> **支持的语言**：`cpp`, `go`, `java`, `kotlin`, `js`, `ts`, `php`, `python`, `ruby`, `rust`, `scala`, `swift`, `html`, `csharp`, `cobol`, `c`, `lua`, `perl`, `haskell` 等。
+
+### 4. `MarkdownHeaderTextSplitter` (Markdown标题分割器)
+
+它能感知 Markdown 的结构，根据指定的标题层级（如 `#`, `##`）来分割文档，并将标题作为元数据保留。
+
+```python
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+
+markdown_document = """
+# Foo
+
+## Bar
+Hi this is Jim
+
+Hi this is Joe
+
+### Boo
+Hi this is Lance
+
+## Baz
+Hi this is Molly
+"""
+
+# 指定要作为分割依据的标题层级及其在元数据中的名称
+headers_to_split_on = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+]
+
+# 创建分割器实例
+markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on)
+
+# 执行分割
+md_header_splits = markdown_splitter.split_text(markdown_document)
+
+for doc in md_header_splits:
+    print(doc)
+# 输出会显示每个块的内容及其对应的标题层级元数据
+```
+
+### 5. `HTMLHeaderTextSplitter` (HTML标题分割器)
+
+与 Markdown 分割器类似，它根据 HTML 的标题标签（如 `<h1>`, `<h2>`）来分割内容，并生成带有层级元数据的 `Document` 对象。
+
+```python
+from langchain_text_splitters import HTMLHeaderTextSplitter
+
+html_content = """
+<html>
+  <body>
+    <h1>Introduction</h1>
+    <p>Welcome to the introduction section.</p>
+    <h2>Background</h2>
+    <p>Some background details here.</p>
+    <h1>Conclusion</h1>
+    <p>Final thoughts.</p>
+  </body>
+</html>
+"""
+
+# 指定要分割的标题标签及对应的元数据名称
+headers_to_split_on = [("h1", "Main Topic"), ("h2", "Sub Topic")]
+
+# 创建分割器实例
+splitter = HTMLHeaderTextSplitter(
+    headers_to_split_on=headers_to_split_on,
+    return_each_element=False  # 设为 True 会为每个 HTML 元素创建一个 Document
+)
+
+# 执行分割
+documents = splitter.split_text(html_content)
+
+for doc in documents:
+    print(doc)
+# 输出会显示每个块的内容及其所属的标题层级元数据
+```
+
+### 6. `RecursiveJsonSplitter` (递归JSON分割器)
+
+这个分割器用于处理大型 JSON 数据。它会深度优先遍历 JSON，将其拆分成更小的、结构化的 JSON 块，并允许控制块的大小。
+
+```python
+import json
+from langchain_text_splitters import RecursiveJsonSplitter
+
+# 示例：一个大型的 JSON 数据（这里用字典表示）
+json_data = {
+    "openapi": "3.1.0",
+    "info": {"title": "LangSmith", "version": "0.1.0"},
+    "servers": [{"url": "https://api.smith.langchain.com"}],
+    "paths": {
+        "/api/v1/sessions/{session_id}": {
+            "get": {
+                "tags": ["tracer-sessions"],
+                "summary": "Read Tracer Session"
+            }
+        }
+    }
+}
+
+# 创建分割器实例，指定最大块大小
+splitter = RecursiveJsonSplitter(max_chunk_size=300)
+
+# 方法一：获取 JSON 块（字典对象）
+json_chunks = splitter.split_json(json_data=json_data)
+for chunk in json_chunks[:2]:
+    print(json.dumps(chunk, indent=2))
+
+# 方法二：获取 LangChain Document 对象
+docs = splitter.create_documents(texts=[json_data])
+for doc in docs[:2]:
+    print(doc)
+
+# 方法三：直接获取文本字符串
+texts = splitter.split_text(json_data=json_data)
+print(texts[0])
+```
+
+### 💎 总结与选择建议
+
+| 分割器 | 适用场景 |
+| :--- | :--- |
+| **`RecursiveCharacterTextSplitter`** | **通用文本的首选**，平衡了语义完整性和块大小控制。 |
+| **`CharacterTextSplitter`** | 需要非常简单的、基于固定字符序列的分割时。 |
+| **代码文本分割器** | 处理 Python、JavaScript 等编程语言的代码。 |
+| **`MarkdownHeaderTextSplitter`** | 处理 Markdown 格式的文档，需要保留其标题结构。 |
+| **`HTMLHeaderTextSplitter`** | 处理 HTML 格式的文档，需要保留其标题结构。 |
+| **`RecursiveJsonSplitter`** | 处理大型、嵌套的 JSON 数据。 |
+
+
+
+
 ## 六、Memory 组件
 
 ### 6.1 临时会话记忆（InMemoryChatMessageHistory）
