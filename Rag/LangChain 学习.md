@@ -768,7 +768,36 @@ texts = splitter.split_text(json_data=json_data)
 print(texts[0])
 ```
 
-### 💎 总结与选择建议
+## 七、`TokenTextSplitter` - 基于 Token 数量的分割器
+
+按 **Token 数量** 而非字符数来分割文本，适合需要精确控制 Token 消耗的场景。
+
+```python
+from langchain_text_splitters import TokenTextSplitter
+
+# 加载文档
+with open("state_of_the_union.txt") as f:
+    state_of_the_union = f.read()
+
+# 创建分割器实例
+text_splitter = TokenTextSplitter(
+    chunk_size=50,          # 每个块的最大 Token 数
+    chunk_overlap=10,       # 块之间的重叠 Token 数
+    encoding_name="cl100k_base"  # 使用的 Tokenizer 编码，默认 "gpt2"
+)
+
+# 执行分割
+texts = text_splitter.split_text(state_of_the_union)
+print(f"分割后的块数: {len(texts)}")
+print(texts[0])
+```
+
+
+
+
+
+
+### 💎 上诉分割器适用场景
 
 | 分割器 | 适用场景 |
 | :--- | :--- |
@@ -778,6 +807,18 @@ print(texts[0])
 | **`MarkdownHeaderTextSplitter`** | 处理 Markdown 格式的文档，需要保留其标题结构。 |
 | **`HTMLHeaderTextSplitter`** | 处理 HTML 格式的文档，需要保留其标题结构。 |
 | **`RecursiveJsonSplitter`** | 处理大型、嵌套的 JSON 数据。 |
+
+
+### 其他分割器
+
+| 分割器名称 | 描述 |
+|------------|------|
+| `TokenTextSplitter` | 基于 Token 数量拆分，对受 Token 限制的 LLM 更精确。 |
+| `HTMLHeaderTextSplitter` | 根据 HTML 标题标签（`<h1>`, `<h2>` 等）拆分，保留层级元数据。 |
+| `HTMLSectionSplitter` | 基于指定的 HTML 标签或字体大小将文档拆分为更大的区块。 |
+| `HTMLSemanticPreservingSplitter` | 拆分时保留表格、列表等 HTML 元素的语义结构，确保它们不被切断。 |
+| `JSFrameworkTextSplitter` | 专门用于处理 React（JSX）、Vue 和 Svelte 等前端框架的代码。 |
+| `ExperimentalMarkdownSyntaxTextSplitter` | 实验性的分割器，旨在处理 Markdown 语法时保留原始空白字符并提取结构化元数据。 |
 
 
 
