@@ -768,7 +768,7 @@ texts = splitter.split_text(json_data=json_data)
 print(texts[0])
 ```
 
-## 七、`TokenTextSplitter` - 基于 Token 数量的分割器
+### 7、`TokenTextSplitter` - 基于 Token 数量的分割器
 
 按 **Token 数量** 而非字符数来分割文本，适合需要精确控制 Token 消耗的场景。
 
@@ -797,7 +797,7 @@ print(texts[0])
 
 
 
-### 💎 上诉分割器适用场景
+### 8、上诉分割器适用场景
 
 | 分割器 | 适用场景 |
 | :--- | :--- |
@@ -809,7 +809,7 @@ print(texts[0])
 | **`RecursiveJsonSplitter`** | 处理大型、嵌套的 JSON 数据。 |
 
 
-### 其他分割器
+### 9、其他分割器
 
 | 分割器名称 | 描述 |
 |------------|------|
