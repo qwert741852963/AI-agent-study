@@ -374,9 +374,9 @@ for chunk in chain.stream(input={"history": history, "question": "粗"}):
 
 
 
-# 四、Chains 组件
+## 四、Chains 组件
 
-## 4.1 链的基础使用
+### 4.1 链的基础使用
 「将组件串联，上一个组件的输出作为下一个组件的输入」是 LangChain 链（尤其是 `|` 管道链）的核心工作原理，这也是链式调用的核心价值：实现数据的自动化流转与组件的协同工作。
 
 ```python
