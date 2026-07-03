@@ -1314,7 +1314,7 @@ def get_weather(location: str, units: str = "celsius") -> str:
     return f"{location}的天气是晴朗的，{units}."
 ```
 
-**⚙️ 其他重要参数**
+**重要参数**
 
 `@tool` 装饰器还提供了其他参数，用于控制工具的行为。
 
@@ -1325,7 +1325,7 @@ def get_weather(location: str, units: str = "celsius") -> str:
 | `args_schema` | `BaseModel` | `None` | 使用 Pydantic 模型定义更严格的输入模式。 |
 | `return_direct` | `bool` | `False` | 如果设为 `True`，工具的输出会直接返回给用户，而不会再次传递给模型进行后续处理。 |
 
-##### 🚀 在 Agent 中使用
+**Agent 中使用**
 
 定义好工具后，将其放入一个列表，并在创建智能体（Agent）时传入即可。
 
@@ -1345,6 +1345,71 @@ result = agent.invoke({"messages": [{"role": "user", "content": "请帮我计算
 print(result)
 ```
 
+### 11.2 BaseTool
+
+`BaseTool` 是 **LangChain** 框架中的一个核心抽象基类。你可以把它理解为所有“工具”的“模板”或“蓝图”。通过继承这个基类并实现其中的方法，你可以为大型语言模型（LLM）创建拥有高度自定义能力的工具。
+
+**为什么需要 BaseTool？**
+
+在 LangChain 中，主要有三种创建工具的方式，它们的对比能帮你理解 `BaseTool` 的定位：
+
+| 创建方式 | 易用性 | 灵活性 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **`@tool` 装饰器** | ⭐⭐⭐⭐⭐ (最简单) | ⭐⭐⭐ (基础功能) | 快速将简单函数转为工具 |
+| **`StructuredTool.from_function`** | ⭐⭐⭐⭐ (灵活配置) | ⭐⭐⭐⭐ (支持异步等) | 需要更多配置，如同步/异步方法 |
+| **继承 `BaseTool` 类** | ⭐⭐ (最复杂) | ⭐⭐⭐⭐⭐ (完全控制) | **需要高度自定义、维护内部状态或依赖注入的复杂场景** |
+
+简单来说，当 `@tool` 装饰器无法满足你的复杂需求时，`BaseTool` 就是那个提供最大自由度的选择。
+
+**BaseTool 的核心要素**
+
+创建一个 `BaseTool` 的子类，需要定义以下几个关键部分：
+
+1.  **`name` (名称)**：工具的唯一标识符。
+2.  **`description` (描述)**：**最重要的部分**，LLM 根据它来决定何时使用该工具。
+3.  **`args_schema` (参数模式)**：一个 Pydantic `BaseModel` 子类，用于定义和验证工具的输入参数。
+4.  **`_run()` (核心逻辑)**：**必须实现**的方法，包含工具被调用时的同步执行逻辑。
+5.  **`_arun()` (异步逻辑)**：可选，用于实现异步执行。
+6.  **`return_direct` (返回策略)**：可选，若设为 `True`，工具的输出会直接返回给用户，而不会继续传给 LLM。
+
+**代码示例**
+
+下面是一个使用 `BaseTool` 创建乘法计算器的完整示例。
+
+```python
+# 1. 导入必要的库
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
+
+# 2. 定义输入参数的模型 (Pydantic)
+class CalculatorInput(BaseModel):
+    a: int = Field(description="第一个数字")
+    b: int = Field(description="第二个数字")
+
+# 3. 继承 BaseTool 并实现自定义工具
+class CustomCalculatorTool(BaseTool):
+    # 定义工具的基本信息
+    name = "Calculator"
+    description = "用于乘法计算" 
+    args_schema = CalculatorInput 
+    return_direct = True # 结果直接返回给用户
+
+    # 实现核心逻辑
+    def _run(self, a: int, b: int) -> int:
+        """执行工具的逻辑：乘法运算"""
+        return a * b
+
+# 4. 使用工具
+tool = CustomCalculatorTool()
+result = tool.invoke({"a": 2, "b": 3})
+print(result) # 输出: 6
+```
+
+**注意事项**
+
+*   使用 `BaseTool` 需要 `langchain-core>=0.2.14`。
+*   直接继承 `BaseTool` 的代码量比 `@tool` 装饰器多，适用于对工具行为有**完全控制权**的复杂场景。
+*   如果工具逻辑不复杂，LangChain 官方更推荐使用 `@tool` 装饰器。
 
 
 
