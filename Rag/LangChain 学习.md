@@ -1259,6 +1259,105 @@ vector_store = Chroma(
 ## 十、LangChain 组件：RunnablePassthrough
 
 让向量检索加入链？使用 `RunnablePassthrough` 类。（具体用法在后续课程中展开，此处仅作提及）
+
+## 十一、工具tool
+### 11.1 @toll
+
+**✍️ 基本用法：从函数到工具**
+```python
+from langchain.tools import tool
+
+@tool
+def search_database(query: str, limit: int = 10) -> str:
+    """在客户数据库中搜索匹配查询的记录。"""
+    return f"为 '{query}' 找到了 {limit} 条结果"
+```
+
+**🎨 进阶定制：名称与描述**
+
+默认情况下，工具名就是函数名，描述就是文档字符串。你也可以在装饰器中显式地覆盖它们，以便更精确地引导模型。
+
+```python
+# 自定义名称
+@tool("web_search")
+def search(query: str) -> str:
+    """在网络上搜索信息。"""
+    return f"'{query}' 的搜索结果"
+
+# 同时自定义名称和描述
+@tool("calculator", description="执行算术计算。遇到任何数学问题时请使用此工具。")
+def calc(expression: str) -> str:
+    """计算数学表达式。"""
+    return str(eval(expression))
+```
+
+**复杂参数：使用 Pydantic 定义输入模式**
+
+当工具需要更复杂的输入（如参数校验、枚举值、多字段对象）时，可以通过 `args_schema` 参数传入一个 Pydantic `BaseModel` 来明确定义。
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+# 1. 定义输入模型
+class WeatherInput(BaseModel):
+    location: str = Field(description="城市名称或坐标")
+    units: Literal["celsius", "fahrenheit"] = Field(
+        default="celsius", description="温度单位偏好"
+    )
+
+# 2. 在 @tool 中指定 args_schema
+@tool(args_schema=WeatherInput)
+def get_weather(location: str, units: str = "celsius") -> str:
+    """获取当前天气。"""
+    # 工具内部的参数名必须与模型定义的一致
+    return f"{location}的天气是晴朗的，{units}."
+```
+
+**⚙️ 其他重要参数**
+
+`@tool` 装饰器还提供了其他参数，用于控制工具的行为。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | 函数名 | 自定义工具名称。 |
+| `description` | `str` | 文档字符串 | 自定义工具描述。 |
+| `args_schema` | `BaseModel` | `None` | 使用 Pydantic 模型定义更严格的输入模式。 |
+| `return_direct` | `bool` | `False` | 如果设为 `True`，工具的输出会直接返回给用户，而不会再次传递给模型进行后续处理。 |
+
+##### 🚀 在 Agent 中使用
+
+定义好工具后，将其放入一个列表，并在创建智能体（Agent）时传入即可。
+
+```python
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+
+# 假设已定义好 multiply 和 divide 工具
+tools = [multiply, divide]
+model = init_chat_model(model="gpt-4o", model_provider="openai")
+
+# 创建 Agent
+agent = create_agent(model=model, tools=tools)
+
+# 运行 Agent
+result = agent.invoke({"messages": [{"role": "user", "content": "请帮我计算 (8 * 3) / 2 的结果"}]})
+print(result)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ```
 
 
