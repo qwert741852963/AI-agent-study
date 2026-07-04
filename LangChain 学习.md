@@ -18,12 +18,18 @@ LangChain 由 Harrison Chase 创建于 2022 年 10 月，它是围绕 LLMs（大
 
 ## 二、Models 组件
 
-### 2.1 输出结果方式（`invoke` 和 `stream`）
+### 2.1 模型调用方式（`invoke` 和 `stream`）
 
-- **`invoke` 方法**：一次性返回完整结果  
-- **`stream` 方法**：逐段返回结果，流式输出
+| 方法名 | 描述 |
+|--------|------|
+| `invoke(input)` | 一次性返回完整结果 |
+| `stream(input)` | 流式输出 逐段返回结果 |
+| `ainvoke(input)` | 异步单次调用 高并发、非阻塞场景 |
+| `batch([inputs])` | 批量同步调用 批量处理多个输入 |
+| `abatch([inputs])` | 批量异步调用 大批量异步处理 |
 
-#### `invoke` 方法示例
+
+**`invoke` 方法示例**
 ```python
 # 以通义千问为例：
 from langchain_community.llms.tongyi import Tongyi
@@ -35,7 +41,7 @@ res = llm.invoke("帮我讲个笑话吧")
 print(res)
 ```
 
-#### `stream` 方法示例
+**`stream` 方法示例**
 ```python
 # langchain_community
 from langchain_community.llms.tongyi import Tongyi
@@ -50,15 +56,36 @@ for chunk in res:
 
 ---
 
-### 2.2 Chat Models（聊天模型）
+## 2.1 LLMs（纯文本模型）
 
+LLM 在 LangChain 中代表"文本补全模型"，输入为纯文本字符串，输出为补全文本。无角色区分，所有输入都被视为连续的文本，不原生支持对话、工具调用或结构化输出。
+```python
+from langchain_openai import OpenAI
+
+# 初始化文本补全模型
+llm = OpenAI(
+    model="gpt-3.5-turbo-instruct",
+    temperature=0.7,
+    max_tokens=256
+)
+
+# 输入是字符串，输出是字符串
+prompt = "请用三句话解释什么是机器学习："
+result = llm.invoke(prompt)
+print(result)
+```
+
+### 2.3 Chat Models（聊天模型）
+
+Chat Models 是基于消息列表的对话模型，输入输出均为结构化消息对象。支持系统角色（System） 、用户角色（Human） 和助手角色（AI） 的区分，天然适配多轮对话场景
 聊天消息包含下面几种类型，使用时需要按照约定传入合适的值：
 
 - **AIMessage**：AI 输出的消息（OpenAI 库中的 `assistant` 角色）
 - **HumanMessage**：用户消息（OpenAI 库中的 `user` 角色）
 - **SystemMessage**：系统消息，用于指定模型角色、背景或输出格式（OpenAI 库中的 `system` 角色）
+- **ToolMessage**：	工具调用结果
 
-#### 2.2.1 单独使用 HumanMessage
+**1） 单独使用 HumanMessage**
 ```python
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.messages import HumanMessage
@@ -74,7 +101,7 @@ for chunk in chat.stream(input=messages):
     print(chunk.content, end="", flush=True)
 ```
 
-#### 2.2.2 使用 SystemMessage + HumanMessage
+**2） 使用 SystemMessage + HumanMessage**
 ```python
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -91,7 +118,7 @@ for chunk in chat.stream(input=messages):
     print(chunk.content, end="", flush=True)
 ```
 
-#### 2.2.3 使用 SystemMessage + HumanMessage + AIMessage
+**3） 使用 SystemMessage + HumanMessage + AIMessage**
 ```python
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -110,7 +137,7 @@ for chunk in chat.stream(input=messages):
     print(chunk.content, end="", flush=True)
 ```
 
-#### 2.2.4 Models 简写形式
+**4） Models 简写形式**
 
 **使用类对象的方式：**
 ```python
@@ -146,29 +173,64 @@ for chunk in model.stream(input=messages):
 
 ### 2.3 Embeddings Models（文本嵌入模型）
 
-嵌入模型将字符串作为输入，返回一个浮点数列表（向量），用于文本向量化。
+嵌入模型将字符串作为输入，返回一个浮点数列表（向量），用于**文本向量化**。
+**文本向量化**：是 RAG 系统和语义搜索的基石
 
-**阿里云千问模型访问方式：**
+**核心方法**
+embed_documents(texts: List[str]) -> List[List[float]]：    用于对文档列表进行向量化，通常用于构建索引或存入向量数据库。
+embed_query(text: str) -> List[float]：                     用于对单个查询文本进行向量化，例如在检索时对用户问题进行编码。
+
+
+**以OpenAI为例**
 ```python
-from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_openai import OpenAIEmbeddings
 
-# 初始化嵌入模型对象，默认使用 text-embedding-v1
-embed = DashScopeEmbeddings()
-# 测试
-print(embed.embed_query("我喜欢你"))
-print(embed.embed_documents(['我喜欢你', '我稀饭你', '晚上吃啥']))
+# 初始化嵌入模型
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    dimensions=512
+)
+
+# 嵌入单个查询
+query_vector = embeddings.embed_query("什么是人工智能？")
+print(f"向量维度: {len(query_vector)}")
+
+# 批量嵌入文档
+doc_vectors = embeddings.embed_documents([
+    "人工智能是计算机科学的一个分支",
+    "机器学习是人工智能的核心技术",
+    "深度学习使用神经网络"
+])
+print(f"生成了 {len(doc_vectors)} 个文档向量")
 ```
 
-**本地 Ollama 模型访问方式：**
-```python
-from langchain_ollama import OllamaEmbeddings
+### 2.4 多模态模型（Multimodal Models）
+多模态模型能够处理和返回除文本外的数据，如图像、音频和视频。支持多模态的模型包括：GPT-4o、Claude 3 系列、Google Gemini 系列等。
 
-# 初始化嵌入模型对象，默认使用 qwen3-embedding
-embed = OllamaEmbeddings(model="qwen3-embedding")
-# 测试
-print(embed.embed_query("我喜欢你"))
-print(embed.embed_documents(['我喜欢你', '我稀饭你', '晚上吃啥']))
+图像理解（Gemini）：
+
+```python
+from langchain_google_genai import ChatGoogleGenerativeAI
+import base64
+
+model = ChatGoogleGenerativeAI(model="gemini-1.5-pro")
+
+# 将图像转为 base64
+with open("image.jpg", "rb") as f:
+    image_data = base64.b64encode(f.read()).decode()
+
+messages = [
+    HumanMessage(content=[
+        {"type": "text", "text": "请描述这张图片的内容"},
+        {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_data}"}
+    ])
+]
+response = model.invoke(messages)
+print(response.content)
 ```
+
+
+
 
 ---
 
