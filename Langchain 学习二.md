@@ -544,8 +544,8 @@ agent = create_agent(
     *   **优雅处理错误**：捕获并妥善处理中间件内部的异常，避免导致整个 Agent 崩溃。
     *   **选择合适的钩子**：根据你的需求，选择最合适的钩子类型。
 
-## 三、Retrievers检索器
-### 3.1 介绍
+## 四、Retrievers检索器
+### 4.1 介绍
 
 Retriever（检索器）是 LangChain 中的一个核心接口，它接受一个非结构化的字符串查询，并返回最相关的 Document 对象列表。检索器比向量存储（Vector Store）更通用——它不需要能够存储文档，只需要能够返回（检索）文档即可。所有向量存储都可以通过 `as_retriever()` 方法转换为检索器。
 
@@ -591,7 +591,7 @@ SelfQueryRetriever（自查询检索器）
 TimeWeightedVectorStoreRetriever（时间加权检索器）
 
 
-### 2. VectorStoreRetriever（向量存储检索器）
+### 4.2 VectorStoreRetriever（向量存储检索器）
 
 最基础的检索器，从向量存储中基于相似度检索文档。
 
@@ -643,7 +643,7 @@ for doc in results:
 ```
 
 
-### 3. MultiQueryRetriever（多查询检索器）
+### 4.3 MultiQueryRetriever（多查询检索器）
 
 使用 LLM 从不同角度生成多个查询变体，分别检索后合并去重，以提高召回率。
 
@@ -672,7 +672,7 @@ docs = retriever.invoke("How many people were injured in the earthquake?")
 ```
 
 
-### 4. EnsembleRetriever（集成检索器）
+### 4.4 EnsembleRetriever（集成检索器）
 
 使用排名融合（Rank Fusion）算法集成多个检索器的结果。
 
@@ -704,7 +704,7 @@ docs = ensemble_retriever.invoke("What is artificial intelligence?")
 ```
 
 
-### 5. ContextualCompressionRetriever（上下文压缩检索器）
+### 4.5 ContextualCompressionRetriever（上下文压缩检索器）
 
 包装基础检索器，对检索结果进行压缩和过滤，只返回最相关的信息。
 
@@ -733,7 +733,7 @@ docs = compression_retriever.invoke("What is the capital of France?")
 ```
 
 
-### 6. ParentDocumentRetriever（父文档检索器）
+### 4.6 ParentDocumentRetriever（父文档检索器）
 
 检索小文本块，然后返回其对应的父文档（更大的文本块），在细粒度检索和充足上下文之间取得平衡。
 
@@ -772,7 +772,7 @@ docs = retriever.invoke("What is machine learning?")
 ```
 
 
-### 7. SelfQueryRetriever（自查询检索器）
+### 4.7 SelfQueryRetriever（自查询检索器）
 
 使用 LLM 生成结构化查询，将自然语言查询转换为向量存储的过滤条件。
 
@@ -813,7 +813,7 @@ docs = retriever.invoke("Show me documents about AI from 2023")
 ```
 
 
-### 8. TimeWeightedVectorStoreRetriever（时间加权检索器）
+### 4.8 TimeWeightedVectorStoreRetriever（时间加权检索器）
 
 结合嵌入相似度和文档新鲜度（时效性）进行检索。
 
@@ -846,7 +846,7 @@ docs = retriever.invoke("Recent developments in quantum computing")
 ```
 
 
-### 9. 其他社区检索器（langchain_community）
+### 4.9 其他社区检索器（langchain_community）
 
 LangChain 社区提供了大量第三方检索器集成：
 
@@ -891,7 +891,7 @@ wiki_retriever = WikipediaRetriever(
 docs = wiki_retriever.invoke("Artificial intelligence")
 ```
 
-### 10、完整示例
+### 4.10 完整示例
 
 ```python
 from langchain_community.document_loaders import TextLoader
