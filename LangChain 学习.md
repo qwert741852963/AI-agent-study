@@ -824,7 +824,18 @@ print(texts[0])
 
 
 ## 六、Memory 组件
-### 6.1 短期记忆 (Short-term Memory)
+### 6.1 短期与长期记忆区别
+简单来说，短期记忆是AI在单次对话中的“工作记忆”，保证对话连贯；长期记忆则是AI的“个人数据库”，让AI能“记住”用户，提供个性化服务。
+在实际应用中，两者常常结合使用。比如，先用长期记忆检索用户偏好和背景信息，再将这些信息连同当前的短期记忆（对话历史）一起，作为上下文提供给大模型，从而生成最贴切的回复。
+**场景一：健康/饮食助手**
+短期记忆：根据用户今天输入的“早餐吃了两个鸡蛋”，推荐合适的午餐。
+长期记忆：记住用户“对花生过敏”和“正在控制碳水摄入”，在所有推荐中自动规避风险食物。
+
+**场景二：编程助手**
+短期记忆：在当前对话中，记得用户刚说“用Python”，因此后续代码示例都用Python给出。
+长期记忆：记住用户“偏好简洁的代码风格”和“主要做数据分析”，主动推荐pandas库，并使用其更简洁的API写法。
+
+### 6.2 短期记忆 (Short-term Memory)
 短期记忆的核心机制是 **检查点（Checkpointer）**。它可以理解为在对话的每一步都自动“存档”，确保应用能在任何时候恢复状态，实现连贯的多轮对话。
 在LangGraph中，短期记忆通过“检查点”实现。你可以把`thread_id`想象成一个对话的房间号。LangGraph会以这个房间号为标识，把每次对话的状态（包括消息历史、当前步骤等）都存成一份“存档”。
 
@@ -1039,8 +1050,122 @@ with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
         graph = builder.compile(checkpointer=checkpointer)
         ```
 
+### 6.3 长期记忆
+LangChain的长期记忆（Long-term Memory）是指代理（Agent）能够**在不同对话和会话之间持久存储并回忆信息**的能力。
 
+LangChain的长期记忆建立在 **LangGraph 的存储（Store）** 之上。记忆以 **JSON 文档** 的形式保存，并通过两层结构来组织：
 
+1.  **命名空间（Namespace）**：类似“文件夹”，用于对记忆进行分组。通常会包含用户ID或组织ID等信息，方便管理。
+2.  **键（Key）**：类似“文件名”，是每条记忆在该命名空间下的唯一标识符。
+
+LangChain 长期记忆的核心用法是**通过工具（Tool）来读写存储（Store）**。
+
+**LangChain 提供了多种存储后端**：
+
+*   **`InMemoryStore`**：用于开发和测试的**内存存储**，数据不会持久化。
+*   **`PostgresStore`**：基于 **PostgreSQL** 的生产环境存储。
+*   **`MongoDBStore`**：基于 **MongoDB** 的存储实现。
+*   **`CosmosDBStore`**：基于 **Azure Cosmos DB** 的存储。
+
+**通过以下步骤为代理赋予持久记忆能力：**
+1.  选择一个存储后端（如 `InMemoryStore`, `PostgresStore`）。
+2.  在创建代理时，将该存储实例传入。
+3.  在自定义的工具函数中，通过 `runtime.store` 的 `put`、`get` 和 `search` 方法来读写记忆。
+
+**PostgresStore举例**
+
+```python
+import os
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain.tools import ToolRuntime
+from langgraph.store.postgres import PostgresStore
+from langchain_openai import ChatOpenAI
+
+# 1. 配置数据库连接
+DB_URI = "postgresql://user:pass@localhost:5432/dbname"
+
+# 2. 初始化 LLM
+model = ChatOpenAI(model="gpt-4o-mini")
+```
+
+2、这是核心部分。我们定义两个工具，分别用于**写入**和**读取**用户的长期记忆。通过 `runtime.store` 对象，工具可以直接与 `PostgresStore` 交互。
+
+```python
+# 写入记忆工具：写入用户偏好
+@tool
+def save_user_preference(input: str, runtime: ToolRuntime) -> str:
+    """保存用户的编程语言偏好。输入是用户偏好的语言，例如 'Python'。"""
+    # 使用命名空间来隔离不同用户的数据 (这里用 'default-user' 作为示例)
+    namespace = ("default-user", "preferences")
+    # 将用户的偏好存入 store，key 为 "programming_language"
+    runtime.store.put(namespace, "programming_language", {"language": input})
+    return f"已成功保存您的偏好：{input}"
+
+# 读取记忆工具：读取用户偏好
+@tool
+def get_user_preference(runtime: ToolRuntime) -> str:
+    """获取用户之前保存的编程语言偏好。"""
+    namespace = ("default-user", "preferences")
+    # 从 store 中读取数据
+    item = runtime.store.get(namespace, "programming_language")
+    if item:
+        # item.value 包含了存储的字典
+        return f"您的编程语言偏好是：{item.value['language']}"
+    return "您还没有设置编程语言偏好。"
+```
+
+3. 创建带有长期记忆的 Agent
+将 `PostgresStore` 实例和定义好的工具传递给 `create_agent` 函数。
+
+```python
+# 5. 创建 PostgresStore 并初始化数据库表
+# 使用 with 语句管理资源，确保连接正常关闭
+with PostgresStore.from_conn_string(DB_URI) as store:
+    # 首次运行时，创建必要的数据库表
+    store.setup()
+
+    # 6. 创建 Agent
+    agent = create_agent(
+        model=model,
+        tools=[save_user_preference, get_user_preference],
+        store=store,  # 将 store 传入 agent
+    )
+
+    # 7. 与 Agent 对话
+    # 第一轮对话：让 Agent 记住一个偏好
+    print("--- 第一轮对话：保存偏好 ---")
+    result1 = agent.invoke(
+        {"messages": [{"role": "user", "content": "我喜欢用 Python 编程。"}]}
+    )
+    # 打印 Agent 的最终回复
+    print(result1["messages"][-1].content)
+
+    # 第二轮对话：在新的线程中，让 Agent 回忆偏好
+    # 注意：这里没有传入 thread_id，但长期记忆是跨线程的，所以依然能访问到
+    print("\n--- 第二轮对话：回忆偏好 ---")
+    result2 = agent.invoke(
+        {"messages": [{"role": "user", "content": "你知道我喜欢的编程语言是什么吗？"}]}
+    )
+    print(result2["messages"][-1].content)
+```
+
+4. 运行与输出
+执行上述代码，你会看到类似下面的输出：
+```
+--- 第一轮对话：保存偏好 ---
+已成功保存您的偏好：Python
+
+--- 第二轮对话：回忆偏好 ---
+您的编程语言偏好是：Python
+```
+在第二轮对话中，尽管没有传入任何历史消息（即没有短期记忆），但 Agent 依然通过 `get_user_preference` 工具从 `PostgresStore` 中读取到了第一轮保存的偏好，证明了长期记忆的有效性。
+
+**5. 关键点总结**
+1.  **`runtime.store` 是桥梁**：所有对长期记忆的读写操作，都通过工具函数中的 `runtime.store` 对象完成。
+2.  **命名空间 (`namespace`) 用于数据隔离**：通过包含 `user_id` 的元组（如 `("user_123", "preferences")`）来隔离不同用户的数据，是推荐的最佳实践。
+3.  **`store.setup()` 只需运行一次**：它的作用是创建必要的数据库表，可以在应用启动时执行。
+4.  **生产环境使用 `PostgresStore`**：示例中的 `InMemoryStore` 仅用于测试，生产环境务必使用 `PostgresStore` 等持久化存储。
 
 ---
 
