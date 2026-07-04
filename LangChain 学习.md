@@ -18,7 +18,7 @@ LangChain 由 Harrison Chase 创建于 2022 年 10 月，它是围绕 LLMs（大
 
 ## 二、Models 组件
 
-### 2.1 模型调用方式（`invoke` 和 `stream`）
+### 2.1 模型调用方式
 
 | 方法名 | 描述 |
 |--------|------|
@@ -56,7 +56,7 @@ for chunk in res:
 
 ---
 
-## 2.1 LLMs（纯文本模型）
+### 2.2 LLMs（纯文本模型）
 
 LLM 在 LangChain 中代表"文本补全模型"，输入为纯文本字符串，输出为补全文本。无角色区分，所有输入都被视为连续的文本，不原生支持对话、工具调用或结构化输出。
 ```python
@@ -171,7 +171,7 @@ for chunk in model.stream(input=messages):
 
 ---
 
-### 2.3 Embeddings Models（文本嵌入模型）
+### 2.4 Embeddings Models（文本嵌入模型）
 
 嵌入模型将字符串作为输入，返回一个浮点数列表（向量），用于**文本向量化**。
 **文本向量化**：是 RAG 系统和语义搜索的基石
@@ -204,7 +204,7 @@ doc_vectors = embeddings.embed_documents([
 print(f"生成了 {len(doc_vectors)} 个文档向量")
 ```
 
-### 2.4 多模态模型（Multimodal Models）
+### 2.5 Multimodal Models（多模态模型）
 多模态模型能够处理和返回除文本外的数据，如图像、音频和视频。支持多模态的模型包括：GPT-4o、Claude 3 系列、Google Gemini 系列等。
 
 图像理解（Gemini）：
