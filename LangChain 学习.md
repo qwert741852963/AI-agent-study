@@ -824,181 +824,223 @@ print(texts[0])
 
 
 ## 六、Memory 组件
+### 6.1 短期记忆 (Short-term Memory)
+短期记忆的核心机制是 **检查点（Checkpointer）**。它可以理解为在对话的每一步都自动“存档”，确保应用能在任何时候恢复状态，实现连贯的多轮对话。
+在LangGraph中，短期记忆通过“检查点”实现。你可以把`thread_id`想象成一个对话的房间号。LangGraph会以这个房间号为标识，把每次对话的状态（包括消息历史、当前步骤等）都存成一份“存档”。
 
-### 6.1 临时会话记忆（InMemoryChatMessageHistory）
+*   **工作流程**：当Agent开始处理一个请求，它会读取该`thread_id`对应的最新“存档”来“回忆”起之前的对话。当处理完一个步骤（如调用工具）或一次完整的对话后，新的状态又会被保存为一份新“存档”。
 
-如果想要封装历史记录，除了自行维护历史消息外，也可以借助 LangChain 内置的历史记录附加功能。
+| 检查点类型 (Checkpointer) | 适用场景 | 持久化 | 特点 |
+| :--- | :--- | :--- | :--- |
+| **`InMemorySaver`** | 本地开发、单元测试 | ❌ 内存 | 简单快速，无外部依赖 |
+| **`SqliteSaver`** | 小型项目、单机应用 | ✅ 本地文件 | 轻量级，无需额外服务 |
+| **`PostgresSaver`** | **生产环境（推荐）** | ✅ 数据库 | 高可靠、功能完整，适合关键任务 |
+| **`MongoDBSaver`** | 生产环境 | ✅ 数据库 | 适合已有MongoDB技术栈的团队 |
+| **`RedisSaver`** | 生产环境（高性能） | ✅ 内存数据库 | 速度极快，适合低延迟场景 |
 
-LangChain 提供了 History 功能，帮助模型在有历史记忆的情况下回答。
+#### 1. 开发与测试 (MemorySaver、InMemorySaver)
 
-- 基于 `RunnableWithMessageHistory` 在原有链的基础上创建带有历史记录功能的新链（新 `Runnable` 实例）
-- 基于 `InMemoryChatMessageHistory` 为历史记录提供内存存储（临时用）
+这些实现将数据保存在内存中，进程重启后数据会丢失，**不适合用于生产环境**。
 
+*   **`MemorySaver` / `InMemorySaver`**：最基础的检查点实现，适合快速原型开发和单元测试。
+    *   **特点**：简单、快速，无需任何外部依赖。
+    *   **适用场景**：本地开发、调试、编写单元测试。
+
+    ```python
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import StateGraph, MessagesState
+
+    # 1. 创建内存检查点
+    checkpointer = InMemorySaver()
+
+    # 2. 构建你的图 (假设已经定义好了 builder)
+    # builder = StateGraph(MessagesState) ...
+    
+    # 3. 编译图时传入 checkpointer
+    graph = builder.compile(checkpointer=checkpointer)
+
+    # 4. 调用时指定 thread_id
+    config = {"configurable": {"thread_id": "user_123_session_1"}}
+    graph.invoke({"messages": [("user", "你好，我叫小明。")]}, config=config)
+    ```
+**具体例子**
 ```python
-from langchain_core.runnables.history import RunnableWithMessageHistory
+# 安装依赖：pip install langgraph langchain-openai
 
-# 通过 RunnableWithMessageHistory 获取一个新的带有历史记录功能的 chain
-conversation_chain = RunnableWithMessageHistory(
-    some_chain,                  # 被附加历史消息的 Runnable，通常是 chain
-    None,                        # 获取指定会话 ID 的历史会话的函数
-    input_messages_key="input",  # 声明用户输入消息在模板中的占位符
-    history_messages_key="chat_history"  # 声明历史消息在模板中的占位符
-)
-```
+from langgraph.graph import StateGraph, MessagesState, START
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_openai import ChatOpenAI
 
-**获取指定会话 ID 的历史会话记录函数：**
+# 1. 创建真实的大模型
+model = ChatOpenAI(model="gpt-4o-mini", api_key="你的API密钥")
 
-```python
-chat_history_store = {}     # 存放多个会话 ID 所对应的历史会话记录
+# 2. 定义AI节点
+def ai_node(state: MessagesState):
+    # 调用大模型，它会自动理解上下文
+    response = model.invoke(state["messages"])
+    return {"messages": [response]}
 
-# 函数传入为会话 ID（字符串类型）
-# 函数要求返回 BaseChatMessageHistory 的子类
-# BaseChatMessageHistory 类专用于存放某个会话的历史记录
-# InMemoryChatMessageHistory 是官方自带的基于内存存放历史记录的类
-def get_history(session_id):
-    if session_id not in chat_history_store:
-        # 返回一个新的实例
-        chat_history_store[session_id] = InMemoryChatMessageHistory()
-    return chat_history_store[session_id]
-```
+# 3. 构建工作流（和之前一样）
+builder = StateGraph(MessagesState)
+builder.add_node("ai_node", ai_node)
+builder.add_edge(START, "ai_node")
 
-**完整代码：**
+# 4. 添加记忆（和之前一样）
+checkpointer = InMemorySaver()
+graph = builder.compile(checkpointer=checkpointer)
 
-```python
-from langchain_community.chat_models.tongyi import ChatTongyi
-from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables.history import RunnableWithMessageHistory
+# 5. 对话
+config = {"configurable": {"thread_id": "room_001"}}
 
-def print_prompt(full_prompt):
-    print("="*20, full_prompt.to_string(), "="*20)
-    return full_prompt
-
-model = ChatTongyi(model="qwen3-max")
-prompt = PromptTemplate.from_template(
-    "你需要根据对话历史回应用户问题。对话历史：{chat_history}。用户当前输入：{input}，请给出回应"
-)
-base_chain = prompt | print_prompt | model | StrOutputParser()
-
-chat_history_store = {}     # 存放多个会话 ID 所对应的历史会话记录
-
-def get_history(session_id):
-    if session_id not in chat_history_store:
-        # 存入新的实例
-        chat_history_store[session_id] = InMemoryChatMessageHistory()
-    return chat_history_store[session_id]
-
-# 通过 RunnableWithMessageHistory 获取一个新的带有历史记录功能的 chain
-conversation_chain = RunnableWithMessageHistory(
-    base_chain,              # 被附加历史消息的 Runnable，通常是 chain
-    get_history,             # 获取历史会话的函数
-    input_messages_key="input",          # 声明用户输入消息在模板中的占位符
-    history_messages_key="chat_history"  # 声明历史消息在模板中的占位符
-)
-
-if __name__ == '__main__':
-    # 如下固定格式，配置当前会话的 ID
-    session_config = {"configurable": {"session_id": "user_001"}}
-    print(conversation_chain.invoke({"input": "小明有一只猫"}, session_config))
-    print(conversation_chain.invoke({"input": "小刚有两只狗"}, session_config))
-    print(conversation_chain.invoke({"input": "共有几只宠物？"}, session_config))
-```
-
-> **小结**：`RunnableWithMessageHistory` 是 LangChain 内 `Runnable` 接口的实现，主要用于创建一个带有历史记忆功能的 `Runnable` 实例（链）。它在创建的时候需要提供一个 `BaseChatMessageHistory` 的具体实现（用来存储历史消息），`InMemoryChatMessageHistory` 可以实现在内存中存储历史。  
-> 额外的，如果想要在 `invoke` 或 `stream` 执行链的同时，将提示词 `print` 出来，可以在链中加入自定义函数实现。注意：函数的输入应原封不动返回出去，避免破坏原有业务，仅在 `return` 之前，`print` 所需信息即可。
-
----
-
-### 6.2 长期会话记忆（自实现 FileChatMessageHistory）
-
-使用 `InMemoryChatMessageHistory` 仅可以在内存中临时存储会话记忆，一旦程序退出，则记忆丢失。
-
-`InMemoryChatMessageHistory` 类继承自 `BaseChatMessageHistory`，在官方注释中给出了相关实现的指南，并给出了基于文件的历史消息存储示例代码。我们可以自行实现一个基于 Json 格式和本地文件的会话数据保存。
-
-**FileChatMessageHistory 类实现核心思路：**
-
-- 基于文件存储会话记录，以 `session_id` 为文件名，不同 `session_id` 有不同文件存储消息
-- 继承 `BaseChatMessageHistory` 实现如下 3 个方法：
-  - `add_messages`：同步模式，添加消息
-  - `messages`：同步模式，获取消息
-  - `clear`：同步模式，清除消息
-
-官方在 `BaseChatMessageHistory` 类的注释中提供了一个基于文件存储的示例代码。
-
-**其余核心代码：**
-
-```python
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.chat_history import BaseChatMessageHistory, BaseMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import messages_from_dict, message_to_dict
-from langchain_community.chat_models.tongyi import ChatTongyi
-from typing import Sequence, List
-import json
-
-# -------------------------- 核心业务逻辑 -------------------------- #
-# 1. 初始化通义千问模型
-llm = ChatTongyi(model="qwen3-max")
-
-# 2. 定义提示词模板（包含对话历史和用户输入）
-prompt = PromptTemplate.from_template("""
-你是一个贴心的助手，需要根据对话历史回应用户的问题。
-对话历史：
-{chat_history}
-用户当前输入：
-{input}
-你的回应：
-""")
-
-# 3. 构建基础链（提示词 -> 模型 -> 输出解析）
-base_chain = prompt | llm | StrOutputParser()
-
-# 4. 定义会话历史获取函数（为每个会话创建独立的文件存储）
-def get_message_history(session_id: str) -> BaseChatMessageHistory:
-    """
-    根据会话 ID 获取对应的对话历史存储实例
-    :param session_id: 会话唯一 ID
-    :return: FileChatMessageHistory 实例
-    """
-    return FileChatMessageHistory(session_id=session_id, storage_path="./chat_history")
-
-# 5. 包装带对话历史的链式调用
-conversation_chain = RunnableWithMessageHistory(
-    runnable=base_chain,
-    get_session_history=get_message_history,   # 历史获取函数
-    input_messages_key="input",   # 用户输入的参数名
-    history_messages_key="chat_history",   # 对话历史的参数名
+# 第一轮
+graph.invoke(
+    {"messages": [{"role": "user", "content": "你好，我叫小明"}]},
+    config=config
 )
 
-# -------------------------- 测试多轮对话 -------------------------- #
-if __name__ == "__main__":
-    # 会话配置（指定会话 ID，用于区分不同用户/会话）
-    session_config = {"configurable": {"session_id": "user_001"}}
-
-    # 第一轮对话
-    response1 = conversation_chain.invoke({"input": "小明有1只猫"}, config=session_config)
-    print("第一轮：", response1)
-
-    # 第二轮对话
-    response2 = conversation_chain.invoke({"input": "小刚有2只狗"}, config=session_config)
-    print("\n第二轮：", response2)
-
-    # 第三轮对话（依赖历史上下文）
-    response3 = conversation_chain.invoke(
-        {"input": "小明和小刚一共有几只宠物?"},
-        config=session_config
-    )
-    print("\n第三轮：", response3)
-
-    # 测试程序重启后读取历史（注释上面的代码，单独运行下面的代码仍能获取历史）
-    # response4 = conversation_chain.invoke(
-    #     {"input": "分别是什么宠物？"},
-    #     config=session_config
-    # )
-    # print("\n重启后第四轮：", response4)
+# 第二轮
+result = graph.invoke(
+    {"messages": [{"role": "user", "content": "我叫什么名字？"}]},
+    config=config
+)
+print(result["messages"][-1].content) 
+# 输出：你叫小明。 ✅ 这才真正记住了！
 ```
+InMemorySaver()	创建一个“临时记事本”，用来记对话
+compile(checkpointer=xxx)	把“记事本”交给AI，让它有记性
+thread_id	为不同聊天室贴标签，相同标签的对话会被记在一起
+程序重启	用 InMemorySaver 的话，所有记忆都会丢失
+
+
+#### 2. 生产环境 (Production)
+
+在生产环境，必须使用由数据库支持的检查点，以实现真正的持久化。
+##### PostgresSaver
+*   **`PostgresSaver`**：将检查点存储在PostgreSQL数据库中。
+    *   **特点**：生产环境最常用的方案，可靠性高，支持完整的历史记录。
+    *   **适用场景**：需要高可靠性和数据完整性的正式线上服务。
+    *   **注意**：首次使用前需调用`checkpointer.setup()`创建必要的数据库表。
+
+    ```python
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    DB_URI = "postgresql://user:pass@localhost:5432/mydb"
+    
+    # 使用上下文管理器，自动处理连接
+    with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
+        # 首次使用需要执行 setup 创建表
+        # checkpointer.setup() 
+        
+        # 编译图时传入 checkpointer
+        graph = builder.compile(checkpointer=checkpointer)
+        # ... 后续调用与 InMemorySaver 类似
+    ```
+    
+    **具体例子**
+    
+```python
+# 1. 导入所需库
+import os
+from langchain.chat_models import init_chat_model  # 用于初始化各种模型[reference:17]
+from langgraph.graph import StateGraph, MessagesState, START
+from langgraph.checkpoint.postgres import PostgresSaver
+
+# 2. 配置你的模型 (以OpenAI为例)
+# 确保环境变量 OPENAI_API_KEY 已设置
+# 或者在代码中直接设置: os.environ["OPENAI_API_KEY"] = "your-api-key"
+model = init_chat_model(model="gpt-4o-mini") # [reference:18]
+
+# 3. 定义PostgreSQL连接字符串
+DB_URI = "postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+
+# 4. 定义AI节点的逻辑
+def call_model(state: MessagesState):
+    """接收当前状态（包含所有历史消息），调用模型并返回回复"""
+    # state["messages"] 包含了整个对话历史
+    response = model.invoke(state["messages"]) # [reference:19]
+    # 返回的消息会被自动添加到状态中
+    return {"messages": response}
+
+# 5. 构建工作流 (Graph)
+builder = StateGraph(MessagesState) # [reference:20]
+builder.add_node("call_model", call_model) # [reference:21]
+builder.add_edge(START, "call_model")
+
+# 6. 【核心】使用 PostgresSaver 编译工作流
+with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
+    # 【重要】首次运行时，取消下面一行的注释来创建数据库表
+    # checkpointer.setup() # [reference:22]
+    
+    # 编译图时传入 checkpointer，使应用获得持久化的短期记忆能力
+    graph = builder.compile(checkpointer=checkpointer) # [reference:23]
+
+    # 7. 开始对话
+    # 配置 thread_id，用于标识不同的对话线程
+    config = {"configurable": {"thread_id": "user_123_session_1"}} # [reference:24]
+
+    print("=" * 50)
+    print("第一轮对话")
+    print("=" * 50)
+    # 用户的第一条消息
+    user_input = {"messages": [{"role": "user", "content": "你好，我叫小明。"}]}
+    # 通过 stream 方法获取模型回复（流式输出）
+    for chunk in graph.stream(user_input, config, stream_mode="values"): # [reference:25]
+        chunk["messages"][-1].pretty_print()
+
+    print("\n" + "=" * 50)
+    print("第二轮对话 (AI应该还记得你的名字)")
+    print("=" * 50)
+    # 用户的第二条消息
+    user_input = {"messages": [{"role": "user", "content": "你还记得我叫什么名字吗？"}]}
+    for chunk in graph.stream(user_input, config, stream_mode="values"):
+        chunk["messages"][-1].pretty_print()
+
+# 程序结束后，with语句会自动关闭数据库连接
+```
+##### MongoDBSaver
+*   **`MongoDBSaver`**：将检查点存储在MongoDB中。
+    *   **特点**：适合已有MongoDB基础设施的团队。
+    *   **适用场景**：项目本身基于MongoDB，希望统一技术栈。
+
+    ```python
+    from langgraph.checkpoint.mongodb import MongoDBSaver
+    from pymongo import MongoClient
+
+    client = MongoClient("mongodb://user:password@localhost:27017")
+    checkpointer = MongoDBSaver(client) # 可指定数据库名，默认为 "langgraph"
+    
+    graph = builder.compile(checkpointer=checkpointer)
+    ```
+##### RedisSaver
+*   **`RedisSaver`**：将检查点存储在Redis中。
+    *   **特点**：速度极快，适合对延迟敏感的应用。提供标准版（`RedisSaver`，保存完整历史）和轻量版（`ShallowRedisSaver`，只保留最新检查点）。
+    *   **适用场景**：追求高性能、低延迟的对话系统。
+    *   **注意**：首次使用前需调用`.setup()`方法创建必要的索引。
+
+    ```python
+    from langgraph.checkpoint.redis import RedisSaver
+
+    # 从连接字符串创建
+    checkpointer = RedisSaver.from_conn_string("redis://localhost:6379")
+    # 首次使用需要 setup
+    # checkpointer.setup()
+    
+    graph = builder.compile(checkpointer=checkpointer)
+    ```
+##### SqliteSaver
+*   **`SqliteSaver`**：将检查点存储在本地SQLite文件中。
+    *   **特点**：轻量级，无需单独部署数据库服务。
+    *   **适用场景**：单机应用、小型项目或演示。
+        ```python
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        
+        # 连接到本地 SQLite 文件
+        checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+        graph = builder.compile(checkpointer=checkpointer)
+        ```
+
+
+
 
 ---
 
