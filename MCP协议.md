@@ -89,14 +89,129 @@ python weather_server.py
 
 至此，就完成了一次完整的MCP交互。
 
-### 📚 更多资源与学习路径
 
-*   **官方与社区教程**：
-    *   **DataCamp课程**：提供了一个从零开始使用Python构建MCP服务器和客户端的系统课程。
-    *   **Real Python**：有详细的教程指导你构建一个Python MCP客户端来测试你的服务器。
-*   **代码示例与SDK**：
-    *   **MCP Python SDK**：官方Python SDK，文档中包含快速开始示例。
-    *   **JavaScript实现**：如果你想用JavaScript/Node.js，可以参考相关的SDK和20行代码实现服务的示例。
-    *   **GitHub仓库**：在GitHub上搜索“mcp-example”或“mcp-tutorial”，可以找到大量社区贡献的完整项目示例。
+## mcp.json 文件配置
+`mcp.json` 是配置 MCP 服务器的核心文件，虽然不同工具的具体实现略有差异，但核心结构和参数是通用的。
 
-从上面的示例可以看出，创建一个基础的MCP服务器门槛很低，但其潜力巨大。你可以从编写一个简单的工具开始，然后逐步尝试连接数据库、调用更复杂的API，将AI的能力扩展到无限广阔的现实世界。
+### 🗂️ 配置文件位置与优先级
+
+`mcp.json` 可以放在不同位置，实现不同范围的配置。通常，**项目级配置的优先级最高**，会覆盖全局配置。
+
+| 配置层级 | 常见路径 (示例) | 优先级 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **项目级 (Project)** | `<项目根目录>/.cursor/mcp.json`<br>`<项目根目录>/.vscode/mcp.json` | **最高** | 配置仅对当前项目生效，适合团队共享。 |
+| **用户级 (User)** | `~/.cursor/mcp.json`<br>`~/.claude/mcp.json` | 中 | 配置对当前用户的所有项目生效。 |
+| **全局 (Global)** | `~/.mcp.json` | 最低 | 作为所有用户的兜底配置。 |
+
+> **注意**：具体的路径和文件名（如 `.cursor/` 或 `.vscode/`）会因你使用的 AI 工具（如 Cursor、VS Code、Claude Code 等）而异。
+
+### 📝 核心配置结构
+
+`mcp.json` 文件是一个标准的 JSON 文件，其最外层必须包含一个名为 `mcpServers` 的对象。
+
+```json
+{
+  "mcpServers": {
+    "your-server-name": {
+      // ... 服务器配置参数
+    },
+    "another-server": {
+      // ... 另一个服务器的配置
+    }
+  }
+}
+```
+
+*   **`mcpServers`**: 根对象，包含了所有 MCP 服务器的配置。
+*   **`"your-server-name"`**: 你为服务器定义的**唯一别名**，AI 工具通过这个名字来识别和调用不同的服务。命名通常只支持字母、数字、下划线、中划线和方括号。
+
+### ⚙️ 服务器配置参数详解
+
+每个服务器配置（即 `"your-server-name": { ... }` 中的内容）都支持以下参数。
+
+#### 通用参数
+
+| 参数名 | 类型 | 必填 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`type` / `transportType`** | 字符串 | **是** | 指定传输类型，决定客户端如何与服务器通信。可选值：`"stdio"`, `"sse"`, `"streamableHttp"`。 | 无 |
+| **`disabled`** | 布尔值 | 否 | 设为 `true` 可禁用该服务器，而无需删除配置。 | `false` |
+| **`timeout`** | 数字 | 否 | 请求超时时间，单位为**秒**。 | `30` 秒 |
+| **`env`** | 对象 | 否 | 以键值对的形式设置**环境变量**，常用于传递 API 密钥等敏感信息。 | `{}` |
+| **`cwd`** | 字符串 | 否 | 指定**进程的工作目录**。如果未指定，默认为用户的家目录。 | 用户家目录 |
+
+#### 传输类型特定参数
+
+| 参数名 | 类型 | 必填 | 说明 | 适用传输类型 |
+| :--- | :--- | :--- | :--- | :--- |
+| **`command`** | 字符串 | **是** | 要执行的**可执行命令**，用于启动本地进程，如 `"npx"`, `"python"`, `"node"`。 | **仅限 `stdio`** |
+| **`args`** | 字符串数组 | 否 | 传给 `command` 的**命令行参数列表**，如 `["-y", "@modelcontextprotocol/server-github"]`。 | **仅限 `stdio`** |
+| **`url`** | 字符串 (URI) | **是** | 远程 MCP 服务器的 **HTTP 或 SSE 端点地址**。 | **仅限 `sse` 或 `streamableHttp`** |
+| **`headers`** | 对象 | 否 | 以键值对形式设置**自定义 HTTP 请求头**，常用于身份验证。 | **仅限 `sse` 或 `streamableHttp`** |
+
+### 💡 配置示例
+
+#### 1. 本地 `stdio` 服务器 (最常用)
+这是最典型的配置，通过启动一个本地进程来提供功能。
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github@0.6.2"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "你的GitHub Token"
+      }
+    }
+  }
+}
+```
+*   **`github`**: 服务器别名。
+*   **`type`**: 设为 `"stdio"`。
+*   **`command`**: 使用 `npx` 命令。
+*   **`args`**: 告诉 `npx` 去运行 `@modelcontextprotocol/server-github` 这个包。
+*   **`env`**: 通过环境变量传入 GitHub 的个人访问令牌。
+
+#### 2. 远程 `sse` 服务器
+连接到已经部署在远程的 MCP 服务器。
+```json
+{
+  "mcpServers": {
+    "monitoring": {
+      "type": "sse",
+      "url": "https://mcp.monitoring.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer 你的访问令牌"
+      },
+      "timeout": 60
+    }
+  }
+}
+```
+*   **`monitoring`**: 服务器别名。
+*   **`type`**: 设为 `"sse"`。
+*   **`url`**: 远程服务器的 SSE 端点。
+*   **`headers`**: 在 HTTP 请求头中携带 Bearer Token 进行认证。
+
+### ✨ 进阶用法：变量占位符
+
+部分工具支持在配置中使用变量占位符，让配置更灵活。例如，在 `command`、`args`、`env` 或 `cwd` 字段中，你可以使用：
+*   `$COMATE.ENV.WORKSPACE`: 代表当前项目的根目录路径。
+*   `$COMATE.ENV.USERNAME`: 代表当前系统的用户名。
+
+这使得路径配置不再依赖于绝对路径，增强了配置文件在不同机器和环境下的可移植性。
+
+### ⚠️ 常见问题与注意事项
+
+*   **配置未生效**：检查文件路径是否正确，以及 `disabled` 字段是否被意外设为 `true`。
+*   **命令找不到**：确认 `command` 对应的程序已安装，或检查 `cwd` 工作目录是否正确。
+*   **认证失败**：仔细检查 `env` 或 `headers` 中的密钥、令牌等敏感信息是否正确无误。
+*   **超时错误**：如果服务器响应较慢，可以尝试增大 `timeout` 的值。
+
+如果遇到问题，可以先检查 AI 工具的日志或输出面板，通常会包含详细的错误信息来帮助你定位问题。
+
+
+
+
+
+
