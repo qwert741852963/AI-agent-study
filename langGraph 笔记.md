@@ -820,10 +820,129 @@ print(result)
 
 ---
 
+## 三、图构建器(StateGraph)
+### 3.1 介绍
+`StateGraph` 是 LangGraph 的核心构建器，用于创建**有状态**、**多步骤**的工作流图。它的核心思想是，图中的各个**节点（Node）** 通过读写一个共享的**状态（State）** 对象来进行通信。
 
+`StateGraph` 本身是一个**构建器（Builder）**，不能直接执行。你需要先通过 `add_node`、`add_edge` 等方法定义图的结构，最后调用 `.compile()` 方法将其编译成一个可执行的图。
 
+**构造函数**
 
+创建 `StateGraph` 实例时，最重要的参数是 `state_schema`，它定义了 State 的结构。
 
+**Python**
+```python
+from langgraph.graph import StateGraph
+from typing import TypedDict
+
+# 1. 使用 TypedDict 定义状态结构
+class MyState(TypedDict):
+    counter: int
+    messages: list
+
+# 2. 创建 StateGraph 实例
+builder = StateGraph(state_schema=MyState)
+```
+
+// 2. 创建 StateGraph 实例
+const builder = new StateGraph(StateAnnotation);
+```
+
+**构造函数参数详解 (Python版)**
+
+| 参数 | 类型 | 描述 |
+| :--- | :--- | :--- |
+| **`state_schema`** | `Type[StateT]` | **(必填)** 定义整个图的状态结构。可以是 `TypedDict`、Pydantic `BaseModel` 或 `dataclass`。 |
+| `context_schema` | `Type[ContextT]` | **可选**。定义运行时上下文（如 `user_id`, `db_conn` 等不变数据）的结构。 |
+| `input_schema` | `Type[InputT]` | **可选**。覆盖图的输入模式，用于校验或类型提示。 |
+| `output_schema` | `Type[OutputT]` | **可选**。覆盖图的输出模式，用于校验或类型提示。 |
+
+**主要方法(StateGraph)*
+`add_node`：添加节点
+`add_edge`：添加普通边
+`add_conditional_edges`：添加条件边
+
+### 3.2 compile（编译图）
+
+- **作用**：将构建好的 `StateGraph` 编译成一个可执行的图。
+- **返回值**：一个 `CompiledStateGraph` 对象。
+
+**示例**:
+```python
+# 编译图，可在此处配置检查点等
+app = builder.compile()
+```
+
+**编译后的执行**
+
+编译后得到的 `CompiledStateGraph` 对象支持多种执行方法：
+
+| 方法 | 描述 |
+| :--- | :--- |
+| **`.invoke(input)`** | 同步执行整个图，并返回最终状态。 |
+| **`.ainvoke(input)`** | 异步执行 `invoke`。 |
+| **`.stream(input)`** | 同步流式执行，逐步返回状态更新。 |
+| **`.astream(input)`** | 异步执行 `stream`。 |
+
+**执行示例 (Python)**:
+```python
+# 调用图，传入初始状态
+final_state = app.invoke({"counter": 0, "messages": []})
+print(final_state) # 输出: {'counter': 1, 'messages': []}
+```
+
+### 3.3 完整代码示例
+
+下面是一个完整的 Python 示例，展示了一个包含条件循环的计数器图。
+
+```python
+from typing import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# 1. 定义状态
+class CounterState(TypedDict):
+    counter: int
+    max_count: int
+
+# 2. 定义节点
+def increment(state: CounterState) -> dict:
+    """计数器加1"""
+    return {"counter": state["counter"] + 1}
+
+def should_continue(state: CounterState) -> str:
+    """判断是否继续增加"""
+    if state["counter"] < state["max_count"]:
+        return "continue"
+    else:
+        return "end"
+
+# 3. 构建图
+builder = StateGraph(state_schema=CounterState)
+
+# 添加节点
+builder.add_node("increment", increment)
+
+# 添加边：从 START 到 increment
+builder.add_edge(START, "increment")
+
+# 添加条件边：从 increment 根据 should_continue 的结果跳转
+builder.add_conditional_edges(
+    "increment",
+    should_continue,
+    {
+        "continue": "increment",  # 形成循环
+        "end": END
+    }
+)
+
+# 4. 编译图
+app = builder.compile()
+
+# 5. 执行图
+initial_state = {"counter": 0, "max_count": 3}
+final_state = app.invoke(initial_state)
+print(final_state)  # 输出: {'counter': 3, 'max_count': 3}
+```
 
 
 
