@@ -844,10 +844,6 @@ class MyState(TypedDict):
 builder = StateGraph(state_schema=MyState)
 ```
 
-// 2. 创建 StateGraph 实例
-const builder = new StateGraph(StateAnnotation);
-```
-
 **构造函数参数详解 (Python版)**
 
 | 参数 | 类型 | 描述 |
