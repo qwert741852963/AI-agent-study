@@ -609,6 +609,221 @@ builder.add_conditional_edges(
 简单来说，**普通边 (`add_edge`) 用于确定的、无分支的流程**，而 **条件边 (`add_conditional_edges`) 用于根据当前状态做出决策的动态流程**。理解并灵活运用这两种边，是构建复杂 LangGraph 应用的基础。
 
 
+## 二、边的高级用法（Command和Send）
+
+### 2.1 介绍
+
+`Command` 和 `Send` 是 LangGraph 中用于实现**动态控制流**的两种高级原语，它们解决了传统“节点-边”静态结构无法灵活应对的复杂场景。
+
+简单来说，`Command` 侧重于 **“节点内部自主决策下一站”** ，而 `Send` 侧重于 **“动态创建并行任务”** 。下表可以帮你快速理解它们的核心区别：
+
+| 特性 | `Command` | `Send` |
+| :--- | :--- | :--- |
+| **核心作用** | 节点在执行完毕后，**自主决定**下一步去哪个节点。 | 在条件边中，**动态地、并行地**将任务派发给一个或多个节点。 |
+| **使用场景** | 多智能体交接、节点内动态路由、替代简单的条件边。 | Map-Reduce 模式、批量数据处理、需要并行执行未知数量任务的场景。 |
+| **返回位置** | 在**节点函数内部**直接返回。 | 在**条件边的路由函数**中返回一个列表。 |
+| **关键参数** | `update` (状态更新), `goto` (目标节点)。 | `node` (目标节点名), `arg` (传递给该节点的状态)。 |
+
+---
+
+### 2.2 Command
+
+`Command` 允许一个节点在返回时，**同时完成两件事**：更新状态 (`update`) 和指定下一个要执行的节点 (`goto`)。这使得流程控制逻辑从“边”转移到了“节点”内部，更加灵活和直观。
+
+**核心参数**
+*   **`update`** (`dict`): 要更新的状态数据，和普通节点返回的更新一样。
+*   **`goto`** (`str` 或 `List[str]`): 指定下一个要执行的节点名称。
+*   **`graph`** (`Command.PARENT`): 在子图中使用时，可通过此参数跳转到父图中的节点。
+*   **`resume`**: 与 `interrupt()` 配合使用，用于恢复被暂停的图。
+
+**基本用法示例**
+假设我们有一个节点，需要根据内部逻辑决定去往 `node_b` 还是 `node_c`。
+
+```python
+from langgraph.graph import StateGraph, END
+from langgraph.types import Command
+from typing import Literal
+
+# 定义状态
+class State(dict):
+    foo: str
+
+# 定义节点，返回类型注解指明了可能跳转的目标节点
+def node_a(state: State) -> Command[Literal["node_b", "node_c"]]:
+    # 模拟一个动态决策
+    import random
+    goto = "node_b" if random.random() > 0.5 else "node_c"
+    
+    # 同时更新状态并指定下一站
+    return Command(
+        update={"foo": "a"},  # 状态更新
+        goto=goto             # 流程控制
+    )
+
+def node_b(state: State):
+    print("执行 B")
+    return {"foo": state.get("foo", "") + "|b"}
+
+def node_c(state: State):
+    print("执行 C")
+    return {"foo": state.get("foo", "") + "|c"}
+
+# 构建图
+builder = StateGraph(State)
+builder.add_node("node_a", node_a, ends=["node_b", "node_c"]) # ends参数帮助可视化
+builder.add_node("node_b", node_b)
+builder.add_node("node_c", node_c)
+builder.add_edge("__start__", "node_a")
+builder.add_edge("node_b", END)
+builder.add_edge("node_c", END)
+
+graph = builder.compile()
+# 此时，图中不存在从 node_a 到 node_b 或 node_c 的显式边
+# 流程完全由 node_a 返回的 Command 决定
+```
+
+**典型应用场景：多智能体交接 (Handoff)**
+`Command` 是实现多智能体系统（Multi-agent System）中“交接”的理想工具。一个智能体（节点）在处理完任务后，可以通过 `Command` 直接将控制权“交接”给另一个专门的智能体（节点）。
+
+```python
+def agent_router(state):
+    # ... 分析用户意图 ...
+    if "天气" in state["query"]:
+        # 交接给天气智能体，并传递相关信息
+        return Command(goto="weather_agent", update={"intent": "weather"})
+    else:
+        return Command(goto="default_agent")
+```
+
+---
+
+### 2.3 Send：动态并行的“任务分派器”
+
+你是一个项目经理，今天要处理一个任务清单：
+```
+任务清单 = ["写报告", "做PPT", "发邮件"]
+```
+你不可能自己一个人干完，所以你**动态**地（根据清单的内容）为**每一个**任务都**招聘**一个员工去执行，而且他们可以**同时开工**。
+
+这里的关键点有三个：
+
+1. **任务数量不确定**：今天是3个，明天可能是10个，没法在代码里写死。
+2. **每个任务处理的数据不同**：一个员工处理“写报告”，一个处理“做PPT”。
+3. **并行执行**：大家同时干，效率最高。
+
+如果用普通的图（边）来做，你只能画死 `A -> B -> C`，无法应对这种“清单长度会变化”的情况。
+
+**`Send` 就是用来做这件事的**：它让你在图的运行过程中，**根据当前状态里的数据，动态地、并行地产生任意数量的新任务**。
+
+---
+
+**🧱 拆解 `Send` 的两个参数**
+`Send` 本身非常简单，就两个参数：
+
+| 参数 | 含义 | 生活化类比 |
+| :--- | :--- | :--- |
+| **`node`** | 你要把任务派给**哪个节点（员工）** 去做。 | “这个任务交给哪位同事？” |
+| **`arg`** | 你要传给那个节点的**专属数据**。 | “交给他的具体工作内容和资料是什么？” |
+
+注意：`arg` 里的数据结构，**可以和你主图的状态（State）结构不同**。比如主图状态是 `{"任务清单": [...]}`，但你用 `Send` 传过去的是 `{"单个任务": "写报告"}`，这样每个员工只关心自己的那一小块工作，更清晰。
+
+---
+
+**📖 一个让你彻底明白的例子**
+
+这次我们做一个**“批量文件处理”**的例子，逻辑简单直接。
+
+**场景:**
+主图接收到一个文件列表 `["a.txt", "b.txt", "c.txt"]`，我们要为**每一个文件**启动一个独立的 `processor` 节点来处理它。
+
+```python
+from langgraph.graph import StateGraph, END
+from langgraph.types import Send
+from typing import List, Annotated
+import operator
+
+# 1. 定义主图的状态
+# files: 待处理的文件列表
+# results: 所有处理结果的汇总（使用 operator.add 自动累加）
+class OverallState(dict):
+    files: List[str]
+    results: Annotated[List[str], operator.add]
+
+# 2. 定义“分配任务”的函数（这是一个条件边的路由函数）
+def assign_worker(state: OverallState):
+    """
+    这个函数根据主状态里的 files 列表，动态产生一堆 Send 任务。
+    """
+    # 关键点：遍历列表，为每一个文件创建一个 Send 对象
+    send_list = []
+    for file_name in state["files"]:
+        # Send(node=目标节点名, arg=传给该节点的状态)
+        # 注意：arg 里的结构是 {"file": file_name}，与主状态 OverallState 不同
+        send_list.append(
+            Send(
+                node="processor",          # 所有任务都发给 processor 这个节点
+                arg={"file": file_name}    # 但每个任务携带的数据不同
+            )
+        )
+    return send_list  # 返回 Send 对象列表
+
+# 3. 定义“工作节点”的函数
+def processor(state: dict):
+    """
+    这个节点接收来自 Send 的 arg 数据，只处理一个文件。
+    state 在这里是 {"file": "a.txt"} 这样的结构。
+    """
+    file = state["file"]
+    # 模拟处理，生成一个结果
+    result = f"已处理: {file}"
+    # 返回的结果会被累加到主状态的 results 字段中（因为用了 operator.add）
+    return {"results": [result]}
+
+# 4. 构建图
+builder = StateGraph(OverallState)
+
+# 添加节点
+builder.add_node("processor", processor)  # 工作节点
+
+# 关键：从 START 开始，添加一条条件边
+# 这条边的路由函数是 assign_worker，它会动态返回一堆 Send
+builder.add_conditional_edges(START, assign_worker)
+
+# 所有 processor 节点执行完毕后，都指向 END
+builder.add_edge("processor", END)
+
+# 5. 编译并运行
+graph = builder.compile()
+
+# 输入一个有 3 个文件的列表
+result = graph.invoke({"files": ["a.txt", "b.txt", "c.txt"], "results": []})
+print(result)
+```
+
+#### 运行结果
+```text
+{
+    'files': ['a.txt', 'b.txt', 'c.txt'],
+    'results': ['已处理: a.txt', '已处理: b.txt', '已处理: c.txt']
+}
+```
+
+---
+
+**❓ 为什么这里必须用 `Send`？不用行不行？**
+你可能会想：“我能不能不用 `Send`，而是直接在 `assign_worker` 节点里写一个循环，依次调用 `processor`？”
+
+**不行。** 原因在于：
+
+*   如果用普通循环，那是**串行**的，一个一个处理，很慢。
+*   `Send` 的强大之处在于，它告诉 LangGraph：“这些任务都是**相互独立**的，请把它们**并行执行**。” LangGraph 会充分利用资源，同时启动多个 `processor` 实例来干活。
+
+---
+
+
+
+
+
 
 
 
