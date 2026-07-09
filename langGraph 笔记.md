@@ -1661,7 +1661,7 @@ if __name__ == "__main__":
 
 `create_agent` 是 LangChain 官方现在**推荐**用于构建生产级智能体的方式。同时，旧版的 `create_react_agent` 已被标记为**废弃（deprecated）**，官方建议统一迁移到 `create_agent`。
 
-
+**3. 举例**
 
 ```python
 from langchain.agents import create_agent
@@ -1700,7 +1700,7 @@ print(response)
 *   `interrupt_before` / `interrupt_after`: （可选）在特定节点（如工具调用）前后暂停执行，实现“人工介入”（Human-in-the-loop）。
 
 
-**3. 总结：如何选择？**
+**总结：如何选择？**
 
 **使用 `create_agent`**：
 当你的需求是标准的“**思考-行动-观察**”循环，即：用户提问 → 模型决定调用工具 → 执行工具 → 返回结果。这是绝大多数单智能体应用场景。
@@ -1710,6 +1710,137 @@ print(response)
 *   **复杂的流程控制**：需要条件分支、循环或并行执行多个独立任务。
 *   **多智能体协作**：需要设计多个智能体相互通信、移交任务的系统。
 *   **深度定制**：需要在工具执行前后插入自定义逻辑，或对状态进行精细控制。
+
+---
+
+
+## 九、流式处理
+
+### 9.1 stream 与 astream
+
+LangGraph 的流式处理是其核心特性之一，主要通过 `stream()` 和 `astream()` 方法实现，能让你在图形执行过程中实时获取状态更新、LLM 令牌等数据。
+
+LangGraph 的编译图（`CompiledGraph`）提供了一对核心方法来实现流式输出：
+*   **`stream` (同步)**：适用于同步环境，返回一个迭代器。
+*   **`astream` (异步)**：适用于 `asyncio` 异步环境，返回一个异步迭代器，是构建实时应用（如Web后端）的常用方式。
+
+两者用法和参数基本一致。
+
+### 9.2 stream_mode 核心参数
+
+`stream_mode` 是控制流式输出内容的核心参数，可以传入**单个模式字符串**或**模式列表**以实现多模式同时输出。
+
+以下是主要的 `stream_mode` 类型及其说明：
+
+| 模式 (Mode) | 描述 (Description) | 输出数据结构 |
+| :--- | :--- | :--- |
+| **`"values"`** | **每一步之后输出状态的完整快照**。适合需要完整上下文的场景。 | 完整的State对象 |
+| **`"updates"`** | **每一步之后仅输出状态的变化部分（增量）**。适合关注变更追踪的场景。 | 包含节点名和其返回的更新数据的字典 |
+| **`"messages"`** | **从节点内流式输出LLM生成的令牌（Token）**。用于实现"打字机"效果。 | 元组 `(消息块, 元数据)` |
+| **`"custom"`** | **流式传输从节点内部通过 `get_stream_writer()` 发送的自定义数据**。用于发送进度、状态等。 | 通过 `writer()` 发送的数据 |
+| **`"debug"`** | **输出图执行过程中的尽可能多的调试信息**。用于开发和调试。 | 详细的调试信息 |
+| **`"tools"`** | **流式传输工具调用的生命周期事件**（开始、进行中、结束、错误）。 | 工具调用事件对象 |
+| **`"checkpoints"`** | **流式传输图的状态检查点**。用于持久化和恢复。 | 检查点对象 |
+| **`"tasks"`** | **流式传输任务执行相关的事件**。 | 任务事件对象 |
+
+### 9.3 其他参数
+
+stream 与 astream 的参数完全一致
+
+以下是完整列表：
+
+
+| 参数 | 类型 | 默认值 | 描述 |
+| :--- | :--- | :--- | :--- |
+| **`input`** | `dict` 或 `Any` | **必填** | 输入到图的初始数据。 |
+| **`config`** | `RunnableConfig` | `None` | 运行配置，如设置 `thread_id` 以支持持久化和中断恢复。 |
+| **`context`** | `ContextT` | `None` | 为本次运行设置的静态上下文。 |
+| **`stream_mode`** | `StreamMode` 或 `Sequence[StreamMode]` | `None` | **核心参数**。控制流式输出的内容，可传入单个模式或模式列表。 |
+| **`print_mode`** | `StreamMode` 或 `Sequence[StreamMode]` | `()` | 与 `stream_mode` 取值相同，但仅用于将输出打印到控制台以辅助调试，不影响图的正常输出。 |
+| **`output_keys`** | `str` 或 `Sequence[str]` | `None` | 指定要流式输出的状态键，默认为所有非上下文通道。 |
+| **`interrupt_before`** | `All` 或 `Sequence[str]` | `None` | 指定在哪些**节点执行前**中断，默认为所有节点。 |
+| **`interrupt_after`** | `All` 或 `Sequence[str]` | `None` | 指定在哪些**节点执行后**中断，默认为所有节点。 |
+| **`subgraphs`** | `bool` | `False` | 是否流式传输子图的事件。 |
+| **`version`** | `str` | - | 指定流式输出的版本格式，例如 `"v2"` 会返回带有类型的结构化数据。 |
+| **`durability`** | `str` | `None` | （特定场景）持久化相关设置，通常由服务端管理。 |
+
+**input**
+图的初始输入，通常是一个字典，其结构需与定义图时的 `State` 类型匹配。
+
+**config**
+用于配置运行时的行为，最常用的是设置 `thread_id` 来实现对话记忆和中断恢复。
+```python
+config = {"configurable": {"thread_id": "user-123"}}
+async for chunk in graph.astream(input, config=config):
+    # 处理流式输出...
+```
+
+**stream_mode**
+控制输出内容，可传入单个模式或多个模式的列表。
+
+```python
+# 单个模式
+async for chunk in graph.astream(input, stream_mode="updates"):
+    ...
+
+# 多个模式：输出会是 ('updates', data) 或 ('custom', data) 这样的元组
+async for chunk in graph.astream(input, stream_mode=["updates", "custom"]):
+    mode, data = chunk
+    ...
+```
+
+**print_mode**
+调试利器，在不影响主逻辑的情况下，将流式内容打印到控制台。
+```python
+# 仅打印 "updates" 模式的数据用于调试，主循环仍按 "values" 模式工作
+async for chunk in graph.astream(input, stream_mode="values", print_mode="updates"):
+    # chunk 是完整的状态
+    ...
+```
+
+**output_keys**
+当状态对象很大，但你只关心其中几个字段时，使用此参数可以过滤输出，提升效率。
+```python
+# 假设 State 包含 'messages', 'user_info', 'debug_info'
+# 只流式输出 'messages' 和 'user_info'
+async for chunk in graph.astream(input, output_keys=["messages", "user_info"]):
+    # chunk 只包含这两个键的值
+    ...
+```
+
+**interrupt_before / interrupt_after**
+与 `config` 中的 `thread_id` 配合，实现人机协作（Human-in-the-loop）。可以在特定节点前后暂停图执行，等待人工输入或确认。
+```python
+# 在节点 'ask_user' 执行前中断
+async for chunk in graph.astream(input, interrupt_before=["ask_user"]):
+    ...
+```
+
+**`subgraphs`**
+如果你的图由多个子图组成，设置此参数为 `True` 可以让你接收到来自子图内部的流式事件。
+
+**`version`**
+用于处理不同版本的流式数据格式。设置为 `"v2"` 时，输出的每个块会是一个带有 `type` 字段的字典，方便进行类型判断。
+```python
+async for chunk in graph.astream(input, version="v2"):
+    if chunk["type"] == "values":
+        # 处理完整状态
+        ...
+```
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
