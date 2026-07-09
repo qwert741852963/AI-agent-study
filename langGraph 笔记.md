@@ -945,7 +945,7 @@ LangGraph的人机交互（Human-in-the-Loop, HIL）核心是**中断（Interrup
 
 实现这一机制，主要依赖两个核心API：`interrupt()` 和 `Command`，并需要**检查点（Checkpointer）** 的支持来持久化状态。
 
-### 4.1 interrupt() （中断）
+### 4.1 interrupt 中断
 `interrupt()` 是触发暂停的关键。当图执行到它时，会暂停并向外返回一个值（payload）。
 ```python
 # 创建包含 interrupt 的节点
@@ -985,7 +985,7 @@ def process_node(state: State):
     return {"user_age": age}
 ```
 
-### 4.2 Command （恢复）
+### 4.2 Command 恢复执行
 `Command` 是用来恢复被中断图执行的指令。
 
 *   **定义与用法**：在第二次调用图（`invoke`, `stream`等）时，通过 `Command(resume=...)` 传入。
