@@ -857,8 +857,8 @@ print(result)
 
 ---
 
-## 三、图构建器(StateGraph)
-### 3.1 介绍
+## 五、图构建器(StateGraph)
+### 5.1 介绍
 `StateGraph` 是 LangGraph 的核心构建器，用于创建**有状态**、**多步骤**的工作流图。它的核心思想是，图中的各个**节点（Node）** 通过读写一个共享的**状态（State）** 对象来进行通信。
 
 `StateGraph` 本身是一个**构建器（Builder）**，不能直接执行。你需要先通过 `add_node`、`add_edge` 等方法定义图的结构，最后调用 `.compile()` 方法将其编译成一个可执行的图。
@@ -895,7 +895,7 @@ builder = StateGraph(state_schema=MyState)
 `add_edge`：添加普通边
 `add_conditional_edges`：添加条件边
 
-### 3.2 compile（编译图）
+### 5.2 compile（编译图）
 
 - **作用**：将构建好的 `StateGraph` 编译成一个可执行的图。
 - **返回值**：一个 `CompiledStateGraph` 对象。
@@ -924,7 +924,7 @@ final_state = app.invoke({"counter": 0, "messages": []})
 print(final_state) # 输出: {'counter': 1, 'messages': []}
 ```
 
-### 3.3 完整代码示例
+### 5.3 完整代码示例
 
 下面是一个完整的 Python 示例，展示了一个包含条件循环的计数器图。
 
@@ -977,12 +977,12 @@ final_state = app.invoke(initial_state)
 print(final_state)  # 输出: {'counter': 3, 'max_count': 3}
 ```
 
-## 四、人机交互
+## 六、人机交互
 LangGraph的人机交互（Human-in-the-Loop, HIL）核心是**中断（Interrupt）** 机制。它允许你在图执行的特定节点暂停，等待外部输入（如人工审批、数据修正等），然后从中断点精确恢复。
 
 实现这一机制，主要依赖两个核心API：`interrupt()` 和 `Command`，并需要**检查点（Checkpointer）** 的支持来持久化状态。
 
-### 4.1 interrupt 中断
+### 6.1 interrupt 中断
 `interrupt()` 是触发暂停的关键。当图执行到它时，会暂停并向外返回一个值（payload）。
 ```python
 # 创建包含 interrupt 的节点
@@ -1022,7 +1022,7 @@ def process_node(state: State):
     return {"user_age": age}
 ```
 
-### 4.2 Command 恢复执行
+### 6.2 Command 恢复执行
 `Command` 是用来恢复被中断图执行的指令。
 
 *   **定义与用法**：在第二次调用图（`invoke`, `stream`等）时，通过 `Command(resume=...)` 传入。
@@ -1037,7 +1037,7 @@ for chunk in graph.stream(Command(resume=user_input), config):
 # 最终状态中 human_value 会被更新为 "25"
 ```
 
-### 4.3 实现步骤与示例
+### 6.3 实现步骤与示例
 
 一个完整的人机交互流程通常包含以下步骤：
 
