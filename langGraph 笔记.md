@@ -1253,6 +1253,7 @@ print(final_state["messages"])
 
 
 **（1）定义共享状态与Reducer**
+
 首先，定义父图和子图共享的状态。由于多个子图都可能修改**共享的 `logs`** 列表，必须定义一个`reducer`函数来安全地合并这些修改。
 
 ```python
