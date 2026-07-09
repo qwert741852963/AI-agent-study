@@ -1404,7 +1404,7 @@ print(final_state["summary_report"])
 
 **子图事件传播**：子图内部的事件如何冒泡到父图
 
-#### 7.3.1 流式事件 (Streaming Events)
+#### 7.3.1 stream 流式事件
 
 
 通过流式事件，父图可以实时接收到子图内部的执行过程，比如状态更新、LLM输出的Token等。
