@@ -1398,6 +1398,113 @@ print(final_state["summary_report"])
 # 输出: 问题主要集中在ChatOllama和Chroma向量库的使用上。
 ```
 
+---
+
+### 7.3 子图事件传播
+
+**子图事件传播**：子图内部的事件如何冒泡到父图
+
+#### 7.3.1 流式事件 (Streaming Events)
+
+
+通过流式事件，父图可以实时接收到子图内部的执行过程，比如状态更新、LLM输出的Token等。
+
+**核心操作**：在父图调用 `.stream()` 或 `.astream()` 方法时，设置参数 `subgraphs=True`。
+
+**代码示例**：
+
+```python
+# 假设已定义并编译好父图 'parent_graph' 和子图 'subgraph'
+# 父图中通过 add_node("subgraph_node", subgraph) 添加了子图
+
+# 在父图上执行流式调用，并开启子图事件上报
+async for event in parent_graph.astream(
+    initial_state, 
+    stream_mode="updates",  # 也可以是 "values", "messages" 等
+    subgraphs=True          # 关键参数：开启子图流式传输
+):
+    # 每个 event 都是一个元组 (namespace, data)
+    namespace, data = event
+    
+    if not namespace:
+        # 命名空间为空，表示事件来自父图本身
+        print(f"[主图事件] {data}")
+    else:
+        # 命名空间非空，标识了事件来源的层级路径
+        # 例如：("subgraph_node:<task_id>", "inner_node:<task_id>")
+        print(f"[子图事件] 来自: {namespace} -> 数据: {data}")
+```
+
+**关键点解析**：
+
+1.  **`subgraphs=True`**：这是开启子图事件“冒泡”的总开关。
+2.  **命名空间 (Namespace)**：这是一个元组，用于精确识别事件来自哪个层级的哪个节点。比如 `("subgraph_node:abc123",)` 表示事件来自名为 `subgraph_node` 的子图。这让你能区分并处理不同来源的事件。
+3.  **流模式 (stream_mode)**：可以设置为 `"updates"`（状态更新）、`"values"`（完整状态）、`"messages"`（LLM令牌）等，以控制接收到的事件内容。
+   
+---
+
+
+#### 7.3.2 Command 传播
+
+命令传播用于子图主动将执行控制权“冒泡”回父图。
+
+**核心操作**：在子图的某个节点中，通过 `return Command(graph=Command.PARENT, goto="目标节点")` 来实现。
+
+**代码示例**：
+
+```python
+from langgraph.types import Command
+
+# 假设有一个子图，它内部有一个判断节点
+def should_go_back_to_parent(state):
+    # ... 一些逻辑判断 ...
+    if some_condition:
+        # 关键：返回 Command，指定跳转到父图中的 'some_node_in_parent'
+        # graph=Command.PARENT 表示目标是当前子图的直接父图
+        return Command(
+            update={"status": "handed_back"},  # 可选：同时更新状态
+            goto="some_node_in_parent",        # 父图中的目标节点名
+            graph=Command.PARENT               # 指定目标图为父图
+        )
+    else:
+        # 否则继续在子图内部执行
+        return {"status": "continue"}
+
+# 在子图中添加这个节点
+subgraph_builder.add_node("decision_node", should_go_back_to_parent)
+```
+
+**关键点解析**：
+
+1.  **`Command` 对象**：它允许一个节点在执行完毕后，**同时**进行状态更新和路由控制。
+2.  **`graph=Command.PARENT`**：这个参数明确指示，路由目标是当前子图的**直接父图**（one hop）。
+3.  **`goto` 参数**：指定在父图中要跳转到的具体节点名称。
+
+---
+
+#### 7.2.3 多层嵌套下的“冒泡”
+
+`Command.PARENT` 只能跳转到**直接父图**。如果图嵌套层级很深（如 根图 -> 子图A -> 子图B），在子图B中使用 `Command.PARENT` 只会回到子图A，而无法直接回到根图。
+
+**解决方案：“中继节点”模式**
+
+这是一种社区推荐的实用模式。核心思想是在每一层父图中都设置一个专门的中继节点，用于将控制权继续向上传递。
+
+```python
+# --- 在子图A中 ---
+def relay_node_in_subgraph_a(state):
+    # 这个节点只做一件事：将控制权继续向上传递给它的父图（根图）
+    return Command(
+        goto="root_target_node",       # 最终目标节点
+        graph=Command.PARENT           # 传递给子图A的父图（即根图）
+    )
+
+# --- 在根图中 ---
+# 根图已经有一个目标节点 'root_target_node'
+# 根图调用子图A，子图A内部通过中继节点，将控制权冒泡回根图的 'root_target_node'
+```
+
+这样，通过在每个层级设置一个“传声筒”节点，就实现了从深层子图到根图的多级控制权传递。
 
 
 
