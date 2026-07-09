@@ -1831,12 +1831,457 @@ async for chunk in graph.astream(input, version="v2"):
 ---
 
 
+## 十、设计模式
+
+
+LangGraph的各种模式，本质区别在于**流程形状**（数据怎么走）、**状态依赖**（下一步依赖什么）和**终止条件**（什么时候停）。下面我把核心模式分为**6大流派**，帮你理清区别和选型逻辑。
+
+
+### 10.1 核心模式对比与选型指南
+
+
+| 模式流派 | **流程形状** | **核心区别（与其他的不同）** | **适用场景（最佳实践）** | **不适用场景（避坑）** |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. 提示链**<br>（顺序流水线） | **线性直线** <br> A → B → C | **无分支、无循环**。每一步的输出严格是下一步的唯一输入。 | **确定性流程**：文档预处理（提取→分块→清洗）、代码生成（写代码→格式化→注释）。 | 任务有多个分支可能；中间步骤失败需要重试或降级时。 |
+| **2. 路由**<br>（动态分支） | **决策树** <br> A → (判断) → B 或 C | **互斥选择**。一次只走一条路，执行完即结束，不合并。 | **意图分类**：客服机器人（退换货/咨询/投诉走不同流程）、多语言翻译（自动识别语种选模型）。 | 需要综合多个分支结果做决策；需要并行处理。 |
+| **3. 并行化 / 协调器-工作者**<br>（扇出/扇入） | **广口瓶型** <br> A → (分裂)B1,B2 → (合并)C | **多路并行**。将大任务拆解为独立子任务同时执行，最后汇总。 | **高吞吐任务**：多文档摘要（同时处理10份文件）、多源数据检索（同时查向量库、ES库、SQL库）。 | 子任务之间有依赖关系（后一步依赖前一步结果）。 |
+| **4. 工具集成 / ReAct**<br>（思考-行动循环） | **螺旋式循环** <br> 思考 → 调用API → 观察 → 再思考 | **与外部世界交互**。核心是“行动-观察”闭环，依赖外部响应来决定下一步。 | **操作型智能体**：订机票（查票→选座→支付）、数据库查询（生成SQL→执行→修正）。 | 纯文本生成任务（如写诗），调用工具会引入不必要的延迟和错误。 |
+| **5. 反思 / 评估器-优化器**<br>（自我修正闭环） | **内循环迭代** <br> 生成 → 评估 → (不合格)修正 → 再评估 | **自我依赖**。不依赖外部工具，仅靠自身逻辑“生成-批评-重写”来提升质量。 | **高质量内容生成**：学术论文润色、代码Bug修复、复杂逻辑推理（Let's verify step by step）。 | 对实时性要求极高（毫秒级响应）；评估标准难以用代码量化时。 |
+| **6. 子图 / 多智能体协作**<br>（嵌套与角色分工） | **分层或网状** <br> 主图调用子图 / 多节点双向通信 | **封装与角色化**。子图是“黑盒”逻辑复用；多智能体是多个独立角色（各有自己的状态）相互对话。 | **复杂团队协作**：软件公司模拟（产品经理写需求→架构师设计→程序员编码→测试员质检）。 | 简单单步任务，引入多角色会过度设计。 |
+
+
+
+**几个关键易混淆点的深度辨析**
+
+为了帮你彻底分清，再重点抠一下几对“双胞胎”：
+
+*   **路由 vs. 并行化**：
+    *   **路由**是“**或**”逻辑（A或B）；**并行化**是“**且**”逻辑（A且B）。
+    *   比如：判断用户情绪（路由） vs. 同时收集用户画像和商品信息（并行）。
+
+*   **反思 vs. 工具集成（ReAct）**：
+    *   **反思**靠“**自己想**”（内部推理）；**ReAct**靠“**外界反馈**”（外部工具）。
+    *   比如：检查文章逻辑漏洞（反思） vs. 搜索最新参考文献（ReAct）。
+
+*   **多智能体协作 vs. 并行化**：
+    *   **并行化**是“**一个人**”把活拆开干；**多智能体**是“**多个人**”分别用自己的脑子（上下文）合作。
+    *   协作中，智能体之间往往有复杂的相互引用和对话，状态管理比简单的并行汇总复杂得多。
+
+
+
+**终极选型口诀**
+
+> **流程固定用链式，意图分裂用路由；**
+> **并行加速用扇出，调用工具用ReAct；**
+> **自我提升用反思，角色协作用多体。**
+
+
+---
+
+
+### 10.2 提示链
+
+**典型应用场景**
+
+*   **内容创作**：如示例所示，按照“大纲 → 初稿 → 润色”的步骤生成高质量文章。
+*   **文档处理**：对长文档进行“提取关键实体 → 生成摘要 → 翻译”等多步骤处理。
+*   **复杂推理**：解决需要多步逻辑推理的问题，如“分析问题 → 查找数据 → 得出结论”。
+*   **代码生成**：先让模型“设计架构”，再“编写代码”，最后“生成测试用例”。
+
+**代码示例：文章自动生成器
+**
+下面是一个完整的示例，展示了如何用提示链模式生成一篇文章。
+
+```python
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# 1. 初始化模型
+model = init_chat_model("gpt-4o-mini")
+
+# 2. 定义状态
+class OverallState(TypedDict):
+    topic: str           # 用户输入的主题
+    outline: str         # 第一步生成的大纲
+    draft: str           # 第二步生成的初稿
+    final_content: str   # 第三步生成的最终文章
+
+# 3. 定义节点函数
+def generate_outline(state: OverallState):
+    """节点1: 根据主题生成大纲"""
+    prompt = f"根据主题生成文章大纲。\n主题：{state['topic']}\n要求：只需两个最核心标题，不用说明。"
+    outline = model.invoke([HumanMessage(content=prompt)]).content
+    return {"outline": outline}
+
+def generate_draft(state: OverallState):
+    """节点2: 根据大纲生成初稿"""
+    prompt = f"根据以下内容生成文章完整初稿。\n主题：{state['topic']}\n大纲：{state['outline']}"
+    draft = model.invoke([HumanMessage(content=prompt)]).content
+    return {"draft": draft}
+
+def polish_article(state: OverallState):
+    """节点3: 润色初稿，生成最终文章"""
+    prompt = f"根据文章初稿进行润色。\n主题：{state['topic']}\n初稿：{state['draft']}"
+    final_content = model.invoke([HumanMessage(content=prompt)]).content
+    return {"final_content": final_content}
+
+# 4. 构建图
+graph = StateGraph(OverallState)
+graph.add_node("generate_outline", generate_outline)
+graph.add_node("generate_draft", generate_draft)
+graph.add_node("polish_article", polish_article)
+
+# 5. 连接节点，形成链
+graph.add_edge(START, "generate_outline")
+graph.add_edge("generate_outline", "generate_draft")
+graph.add_edge("generate_draft", "polish_article")
+graph.add_edge("polish_article", END)
+
+# 6. 编译和运行
+app = graph.compile()
+result = app.invoke({"topic": "人工智能的未来发展趋势"})
+
+# 打印最终结果
+print(result["final_content"])
+```
+
+
+### 10.3 路由
+
+
+LangGraph 的**路由模式（Routing Pattern）**，核心是根据当前状态或输入，动态地将执行流程导向不同的下游节点。
+
+**两种实现路由的方式：**
+
+| 特性 | 条件边 (Conditional Edges) | Command 对象 (Command) |
+| :--- | :--- | :--- |
+| **核心机制** | 在节点间定义一个**判断函数**，根据其返回值选择下一个节点。 | 在节点**内部**直接返回一个 `Command` 对象，同时指定下一个节点和要更新的状态。 |
+| **状态更新** | 路由逻辑与状态更新分离。 | **路由和状态更新合一**，在一个操作中完成。 |
+| **使用场景** | 流程简单、分支固定（如：根据分类走A或B路径）。 | 流程复杂，需要在路由同时传递或修改数据（如：多智能体交接）。 |
+| **路由目标** | 通常是**单个**预定义的下游节点。 | 可以是**单个**节点，也可以是**多个**并行节点（通过 `Send` 实现扇出）。 |
+
+
+**典型应用场景**
+
+*   **智能客服/问答系统**：根据用户问题的意图或分类，路由到对应的知识库、处理流程或专业智能体。
+*   **模型路由 (Model Routing)**：根据查询的复杂度或类型，选择最合适、最具成本效益的模型来处理。
+*   **多智能体协作 (Multi-Agent Systems)**：由一个“监督者”（Supervisor）智能体负责接收任务，并动态地分配给其他专门的智能体执行。
+*   **RAG 系统的智能检索**：在检索增强生成（RAG）系统中，先判断查询是否需要检索、去哪个知识库检索，或者根据检索结果的相关性决定是直接回答还是重新提问。
+
+
+
+**代码示例：智能客服路由系统**
+
+下面通过一个**智能客服系统**的例子，对比两种路由方式的实现。
+
+系统接收用户问题，先由“分类器”判断问题类型，然后路由到对应的专业客服（`support` 支持、`billing` 账单、`technical` 技术）。
+
+以条件边举例
+
+
+```python
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, Literal
+
+class State(TypedDict):
+    messages: list
+    question_type: str  # 存储分类结果
+
+# 1. 定义分类器节点
+def classifier_node(state: State):
+    # 模拟一个LLM调用，对问题进行分类
+    # 实际应用中，这里会调用LLM并解析输出
+    query = state["messages"][-1]["content"]
+    if "价格" in query or "付" in query:
+        question_type = "billing"
+    elif "登录" in query or "错误" in query:
+        question_type = "technical"
+    else:
+        question_type = "support"
+    return {"question_type": question_type}
+
+# 2. 定义各个客服节点 (简化)
+def support_agent(state: State): return {"messages": ["支持团队已响应"]}
+def billing_agent(state: State): return {"messages": ["账单团队已响应"]}
+def technical_agent(state: State): return {"messages": ["技术团队已响应"]}
+
+# 3. 定义路由判断函数
+def route_question(state: State) -> Literal["support_agent", "billing_agent", "technical_agent"]:
+    # 根据状态中的 question_type 返回下一个节点的名称
+    return {
+        "support": "support_agent",
+        "billing": "billing_agent",
+        "technical": "technical_agent"
+    }.get(state["question_type"], "support_agent") # 默认走support
+
+# 4. 构建图
+graph = StateGraph(State)
+graph.add_node("classifier", classifier_node)
+graph.add_node("support_agent", support_agent)
+graph.add_node("billing_agent", billing_agent)
+graph.add_node("technical_agent", technical_agent)
+
+graph.add_edge(START, "classifier")
+# 5. 添加条件边：从 classifier 出发，由 route_question 函数决定走向
+graph.add_conditional_edges("classifier", route_question)
+# 所有客服节点最终都指向 END
+graph.add_edge("support_agent", END)
+graph.add_edge("billing_agent", END)
+graph.add_edge("technical_agent", END)
+
+app = graph.compile()
+```
+
+---
+
+
+### 10.4 并行化模式
+
+这种模式的核心是**将多个独立的任务同时执行**，以显著减少总耗时。它的特点是所有子任务在开始前就已明确，且彼此间没有依赖关系。
+
+**核心机制：扇出 (Fan-out) 与扇入 (Fan-in)**
+
+LangGraph通过“扇出”和“扇入”机制来实现并行化。
+
+*   **扇出 (Fan-out)**：一个节点后连接多个下游节点，执行时会**并发地触发**所有这些节点。
+*   **扇入 (Fan-in)**：多个并行节点完成后，汇聚到同一个下游节点，等待所有并行任务结束后再继续。
+
+这些并行节点在同一个 **“超级步骤” (Super-step)** 中执行，该步骤具有**事务性（Transactional）**：要么所有并行任务都成功，状态统一更新；要么任何一个失败，整个步骤回滚，不更新任何状态。
+
+
+**代码示例：多语言翻译**
+
+假设需要将一篇英文文章同时翻译成中文、法语和西班牙语。
+
+```python
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, Annotated, List
+import operator
+
+class State(TypedDict):
+    source_text: str
+    # 使用 operator.add 作为 reducer，让结果可以累加
+    translations: Annotated[List[str], operator.add] 
+
+# 1. 定义各个翻译节点
+def translate_to_chinese(state: State):
+    # 模拟翻译，实际可调用LLM
+    return {"translations": [f"[中文翻译] {state['source_text']}"]}
+
+def translate_to_french(state: State):
+    return {"translations": [f"[Traduction française] {state['source_text']}"]}
+
+def translate_to_spanish(state: State):
+    return {"translations": [f"[Traducción al español] {state['source_text']}"]}
+
+# 2. 定义汇总节点
+def aggregate_translations(state: State):
+    # 所有翻译结果此时已通过 reducer 汇总在 state['translations'] 中
+    print(f"所有翻译完成: {state['translations']}")
+    # 可以在这里进行最终处理
+    return state
+
+# 3. 构建图
+graph = StateGraph(State)
+graph.add_node("translate_to_chinese", translate_to_chinese)
+graph.add_node("translate_to_french", translate_to_french)
+graph.add_node("translate_to_spanish", translate_to_spanish)
+graph.add_node("aggregate", aggregate_translations)
+
+graph.add_edge(START, "translate_to_chinese")
+graph.add_edge(START, "translate_to_french")
+graph.add_edge(START, "translate_to_spanish")
+# 所有翻译节点完成后，汇聚到 aggregate 节点
+graph.add_edge("translate_to_chinese", "aggregate")
+graph.add_edge("translate_to_french", "aggregate")
+graph.add_edge("translate_to_spanish", "aggregate")
+graph.add_edge("aggregate", END)
+
+app = graph.compile()
+# 执行
+result = app.invoke({"source_text": "Hello, world!", "translations": []})
+```
+
+---
+
+
+### 10.5 ReAct 模式
+
+
+ReAct 的核心是一个不断循环的 **“思考 → 行动 → 观察”** 过程：
+
+1. **思考 (Thought / Reasoning)**：模型分析当前情况，思考“我现在知道什么？我还缺什么信息？下一步该做什么？”。
+2. **行动 (Action / Acting)**：模型执行一个具体操作，最常见的是**调用一个工具**（如搜索、查天气、计算、调用API）。
+3. **观察 (Observation)**：模型接收工具返回的结果（数据、报错、查询结果）。
+
+这个循环会一直重复，直到模型认为收集了足够信息，最终给出最终答案。
+
+
+**直观示例**
+
+假设你问：“北京现在的气温比伦敦高多少度？”
+
+**ReAct 模式的执行轨迹**（模型内心 OS）：
+
+- **思考 1**：我需要知道北京和伦敦的实时气温，但我没有实时数据，得查一下。
+- **行动 1**：调用 `查询天气(北京)`。
+- **观察 1**：工具返回“北京：25°C”。
+- **思考 2**：知道了北京是 25°C，现在需要伦敦的气温。
+- **行动 2**：调用 `查询天气(伦敦)`。
+- **观察 2**：工具返回“伦敦：15°C”。
+- **思考 3**：北京 25°C，伦敦 15°C，差值是 10°C。现在信息够了，可以回答了。
+- **最终输出**：“北京气温比伦敦高 10°C。”
+
+
+在 LangGraph 的图里：
+- **`agent`节点** 负责“思考”和“决定行动”。
+- **`tools`节点** 负责执行“行动”并返回“观察结果”。
+- **条件边** 负责将循环串联起来。
+
+
+**ReAct 两种实现方式**
+
+| 方面 | `create_react_agent` | 手动构建 |
+|------|----------------------|----------|
+| **代码量** | ~10行 | ~50行 |
+| **状态管理** | 只维护消息列表 | 可以自定义任何状态字段（如`tool_call_count`） |
+| **工具执行过程** | 内部自动处理 | 你**完全控制**：可以修改工具输入、处理输出、忽略某些调用等 |
+| **路由逻辑** | 固定（有工具调用就走工具，否则结束） | 你可以根据**任何条件**路由，比如限制最大调用次数后强制结束 |
+| **错误处理** | 内置基础重试 | 你可以捕获异常、返回友好提示、或转入备用流程 |
+| **中间件/钩子** | 不支持 | 你可以在任何节点插入日志、监控、限流等 |
 
 
 
 
+*   **`create_react_agent`：** 是“一键启动”的傻瓜相机，适合大多数标准场景，让你专注于业务逻辑。
+*   **手动构建：** 是“单反相机”，虽然操作复杂，但你可以调整**每一个参数**，实现任何自定义需求。
 
 
+
+**方式一：手动构建 `StateGraph`（完全透明）**
+
+```python
+from langgraph.graph import StateGraph, END, START
+from langgraph.graph.message import add_messages
+from typing import TypedDict, Annotated, Literal
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage, AIMessage
+import json
+
+# 1. 定义状态（显式管理消息和中间变量）
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]  # 历史消息
+    # 我们可以添加自定义字段，比如记录工具调用次数
+    tool_call_count: int  
+
+# 2. 定义工具（同前）
+@tool
+def add(a: float, b: float) -> float:
+    """将两个数字相加。"""
+    return a + b
+
+@tool
+def get_weather(city: str) -> str:
+    """查询某城市的当前天气。"""
+    return f"{city} 天气晴朗，25°C"
+
+tools = [add, get_weather]
+tool_map = {tool.name: tool for tool in tools}
+
+# 3. 定义节点函数
+
+# 3.1 智能体节点：调用LLM，决定是否调用工具
+def agent_node(state: AgentState):
+    model = ChatOpenAI(model="gpt-4o").bind_tools(tools)
+    response = model.invoke(state["messages"])
+    # 我们在这里可以添加自定义逻辑，比如记录调用次数
+    return {"messages": [response], "tool_call_count": state.get("tool_call_count", 0)}
+
+# 3.2 工具节点：执行工具调用（LangGraph提供便利的ToolNode，但我们手动实现以展示细节）
+def tool_node(state: AgentState):
+    last_message = state["messages"][-1]
+    tool_calls = last_message.tool_calls
+    results = []
+    for tc in tool_calls:
+        tool = tool_map[tc["name"]]
+        result = tool.invoke(tc["args"])
+        # 我们可以在这里对结果做后处理，比如格式化、记录日志
+        results.append(
+            ToolMessage(
+                content=json.dumps(result),  # 转为字符串
+                tool_call_id=tc["id"]
+            )
+        )
+    # 增加调用计数
+    return {"messages": results, "tool_call_count": state["tool_call_count"] + len(tool_calls)}
+
+# 4. 定义路由函数（判断下一步是走工具还是结束）
+def should_continue(state: AgentState) -> Literal["tool_node", END]:
+    last_message = state["messages"][-1]
+    # 如果LLM想调用工具，就继续到工具节点
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tool_node"
+    else:
+        # 否则结束
+        return END
+
+# 5. 构建图
+builder = StateGraph(AgentState)
+builder.add_node("agent", agent_node)
+builder.add_node("tool_node", tool_node)
+
+builder.add_edge(START, "agent")
+builder.add_conditional_edges("agent", should_continue)
+builder.add_edge("tool_node", "agent")  # 工具执行完后回到agent
+
+graph = builder.compile()
+
+# 6. 调用
+result = graph.invoke({
+    "messages": [{"role": "user", "content": "北京天气如何？然后计算一下温度加5度是多少？"}],
+    "tool_call_count": 0
+})
+print(result["messages"][-1].content)
+```
+
+
+**方式二：create_agent**
+
+```python
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+
+# 1. 定义工具
+@tool
+def add(a: float, b: float) -> float:
+    """将两个数字相加。"""
+    return a + b
+
+@tool
+def get_weather(city: str) -> str:
+    """查询某城市的当前天气。"""
+    return f"{city} 天气晴朗，25°C"
+
+# 2. 初始化模型
+model = ChatOpenAI(model="gpt-4o")
+
+# 3. 创建智能体
+agent = create_agent(
+    model=model,
+    tools=[add, get_weather],
+    system_prompt="你是一个乐于助人的助手，可以查询天气和进行计算。" # 新增的系统提示词参数
+)
+
+# 4. 调用智能体
+result = agent.invoke({
+    "messages": [{"role": "user", "content": "北京天气如何？然后计算一下温度加5度是多少？"}]
+})
+print(result["messages"][-1].content)
+```
 
 
 
