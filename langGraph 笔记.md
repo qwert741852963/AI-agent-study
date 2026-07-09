@@ -1508,11 +1508,208 @@ def relay_node_in_subgraph_a(state):
 
 
 
+## 八、工具调用机制
+
+
+LangGraph 的工具调用（Tool Calling）是其智能体（Agent）能够与外部世界交互的核心机制。它的设计遵循“声明-绑定-调用”的三段式架构，将工具的**定义**、**注册**与**执行**进行解耦。
+
+下面我将从机制流程、核心组件、完整示例、高级话题和常见问题等几个方面，系统地梳理其深度知识点。
+
+LangGraph 工具调用的完整流程可以概括为以下几个步骤：
+
+1.  **定义工具 (Define)**：开发者使用 `@tool` 装饰器将普通 Python 函数封装成 LangChain 工具（Tool）。
+2.  **绑定工具 (Bind)**：通过 `bind_tools()` 方法，将工具列表“绑定”到聊天模型（Chat Model）上。这一步是**声明式**的，让模型“知道”它可以使用哪些工具，但并不执行它们。
+3.  **模型决策 (Model Decides)**：当用户输入被传递给绑定了工具的模型后，模型会判断是否需要调用工具。如果需要，模型输出的 `AIMessage` 中会包含 `tool_calls` 属性。
+4.  **执行工具 (Execute)**：`ToolNode` 会读取 `AIMessage` 中的 `tool_calls`，并并行或串行地执行对应的工具。
+5.  **返回结果 (Return Result)**：工具执行的结果会被封装成 `ToolMessage` 对象，并更新到图的状态（State）中，通常作为对话历史的一部分返回给模型，以便模型进行下一步推理或生成最终答案。
+
+### 8.1. 三大核心组件
+
+LangGraph 的工具调用围绕三个核心组件展开：
+
+#### 工具 (Tool) 
+
+工具是封装了函数及其输入输出模式（Schema）的实体。
+
+*   **定义方式**：主要通过 `@tool` 装饰器将函数转换为工具。
+*   **关键要素**：
+    *   **函数体**：实现具体的业务逻辑。
+    *   **函数名**：应使用动词+名词的格式，清晰描述功能（如 `get_weather`）。
+    *   **文档字符串 (Docstring)**：**极其重要**。模型会依赖此描述来判断何时调用该工具。
+    *   **类型提示 (Type Hints)**：用于生成工具的参数结构（Schema），指导模型如何填充参数。
+    *   **错误处理**：应在函数内部妥善处理异常并返回友好的错误信息，而不是直接抛出异常。
+
+---
+
+#### bind_tools 绑定
+
+通过 `bind_tools()` 方法将工具列表注册到模型上。
+
+*   **技术本质**：执行 `bind_tools` 操作时，框架会完成工具元数据注册、调用权限声明和路由规则初始化三重契约。
+*   **作用**：让模型“知道”可用工具的清单，但**不执行**任何工具。
+*   **用法**：`llm_with_tools = llm.bind_tools(tools)`。
+
+---
+
+#### ToolNode 执行
+
+`ToolNode` 是 LangGraph 预构建的一个节点，专门负责执行工具。
+
+*   **定义**：`tool_node = ToolNode(tools)`。
+*   **输入**：包含消息列表（`messages`）的图状态（State），并且要求列表中的**最后一条消息必须是带有 `tool_calls` 的 `AIMessage`**。
+*   **输出**：包含一个或多个 `ToolMessage` 对象列表的状态更新。
+*   **核心能力**：
+    *   **并行执行**：如果模型一次请求调用多个工具，`ToolNode` 会**并行**执行它们以提高效率。
+    *   **状态注入**：可以通过 `InjectedState` 注解，将图的状态（State）注入到工具函数中。
+    *   **错误处理**：默认会捕获工具执行中的异常，并将其封装成错误信息返回。
+
+---
+
+### 8.2. 完整代码示例
+
+以下是一个使用 Python 构建 ReAct 风格 Agent 的完整示例，整合了上述所有概念。
+
+```python
+from typing import Literal
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
+
+# 1. 定义工具
+@tool
+def get_weather(city: str) -> str:
+    """获取指定城市的当前天气。"""
+    # 模拟天气API调用
+    if city.lower() == "beijing":
+        return "北京天气晴朗，气温25°C。"
+    return f"{city}的天气信息暂不可用。"
+
+@tool
+def calculate(expression: str) -> str:
+    """计算一个数学表达式的结果。"""
+    try:
+        result = eval(expression)
+        return f"计算结果: {result}"
+    except Exception as e:
+        return f"计算错误: {str(e)}"
+
+tools = [get_weather, calculate]
+
+# 2. 绑定工具到模型
+llm = ChatOpenAI(model="gpt-4o")
+llm_with_tools = llm.bind_tools(tools)
+
+# 3. 构建图
+def agent_node(state: MessagesState):
+    """Agent节点：调用绑定了工具的LLM"""
+    response = llm_with_tools.invoke(state["messages"])
+    return {"messages": [response]}
+
+# 创建ToolNode
+tool_node = ToolNode(tools)
+
+# 构建状态图
+builder = StateGraph(MessagesState)
+builder.add_node("agent", agent_node)
+builder.add_node("tools", tool_node)
+
+# 添加边和条件路由
+builder.add_edge(START, "agent")
+builder.add_conditional_edges(
+    "agent",
+    tools_condition,  # 预置的条件路由函数，根据是否有tool_calls决定走向
+)
+builder.add_edge("tools", "agent")  # 工具执行后返回agent
+
+graph = builder.compile()
+
+# 4. 执行
+if __name__ == "__main__":
+    # 示例1：需要调用工具
+    inputs = {"messages": [("user", "北京天气怎么样？")]}
+    for event in graph.stream(inputs, stream_mode="values"):
+        event["messages"][-1].pretty_print()
+
+    # 示例2：需要调用多个工具（并行执行）
+    inputs = {"messages": [("user", "计算 3.14 * 2 的平方，并告诉我北京的天气。")]}
+    for event in graph.stream(inputs, stream_mode="values"):
+        event["messages"][-1].pretty_print()
+```
+
+---
+
+### 8.3 create_agent 用法
+
+
+`create_agent` 和之前我们聊的手动构建 `StateGraph` 的关系，就像是 **“一键式启动的智能体工厂”** 与 **“需要亲手设计图纸和组装零件的车间”**。
+
+**1. 为什么用法不一样？（核心区别）**
+
+之前手动构建 `StateGraph` 的方式，代码更底层，需要你亲自定义每个节点（`agent`、`tools`）和路由逻辑（`tools_condition`）。
+
+而 `create_agent` 在内部**自动完成了所有这些工作**。它封装了构建一个标准 ReAct 智能体所需的全部图结构和执行循环，让你可以用极简的代码启动一个功能完备的智能体。
+
+| 特性 | 手动构建 `StateGraph`（底层） | 使用 `create_agent`（高级） |
+| :--- | :--- | :--- |
+| **代码量** | 较多，需要定义节点、边、条件路由 | **极少**，核心功能只需几行代码 |
+| **控制粒度** | **精细**，可完全控制每个流程细节 | **粗放**，遵循封装好的标准流程 |
+| **内部实现** | 公开的，完全由你定义 | **黑盒**，内部自动构建了 `StateGraph` |
+| **使用场景** | 需要高度定制化流程（如多智能体协作、复杂条件分支、人工介入） | 大多数标准、单智能体的工具调用场景 |
+
+**2. 它是什么，怎么用？**
+
+`create_agent` 是 LangChain 官方现在**推荐**用于构建生产级智能体的方式。同时，旧版的 `create_react_agent` 已被标记为**废弃（deprecated）**，官方建议统一迁移到 `create_agent`。
 
 
 
+```python
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+
+# 1. 定义工具（和之前完全一样）
+@tool
+def get_weather(city: str) -> str:
+    """获取指定城市的天气"""
+    return f"{city} 是晴天，25°C"
+
+# 2. 初始化模型
+model = ChatOpenAI(model="gpt-4o-mini")
+
+# 3. 一键创建智能体
+agent = create_agent(
+    model=model,
+    tools=[get_weather],  # 传入工具列表
+    system_prompt="你是一个有用的天气助手。"  # 可选，设置系统提示词
+)
+
+# 4. 直接调用
+response = agent.invoke({
+    "messages": [{"role": "user", "content": "北京天气怎么样？"}]
+})
+print(response)
+```
+
+**`create_agent` 的核心参数**
+
+*   `model`: 你的聊天模型实例。
+*   `tools`: 一个工具列表，供智能体调用。
+*   `system_prompt`: （可选）设置智能体的系统指令。
+*   `checkpointer`: （可选）用于持久化对话状态，实现记忆功能。
+*   `interrupt_before` / `interrupt_after`: （可选）在特定节点（如工具调用）前后暂停执行，实现“人工介入”（Human-in-the-loop）。
 
 
+**3. 总结：如何选择？**
+
+**使用 `create_agent`**：
+当你的需求是标准的“**思考-行动-观察**”循环，即：用户提问 → 模型决定调用工具 → 执行工具 → 返回结果。这是绝大多数单智能体应用场景。
+
+**选择手动构建 `StateGraph`**：
+当标准流程无法满足需求时。例如：
+*   **复杂的流程控制**：需要条件分支、循环或并行执行多个独立任务。
+*   **多智能体协作**：需要设计多个智能体相互通信、移交任务的系统。
+*   **深度定制**：需要在工具执行前后插入自定义逻辑，或对状态进行精细控制。
 
 
 
