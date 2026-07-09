@@ -1,8 +1,7 @@
 
-## 一、三大核心组件
-### 1.1 state状态
+## 一、state状态
 
-#### 1.1.1 定义状态（State）
+### 1.1 定义状态（State）
 
 LangGraph 支持多种方式来定义状态的结构。
 
@@ -54,8 +53,8 @@ const MessagesState = Annotation.Root({
 ```
 
 
-#### 1.1.2 Reducer（归约器）
-##### Reducer 的用法
+### 1.2 Reducer（归约器）
+#### Reducer 的用法
 **Reducer（归约器）是 LangGraph 中控制状态如何更新的核心函数**。简单来说，当一个节点（Node）执行完成后返回更新数据时，Reducer 决定了这份新数据**如何与状态（State）中的现有数据融合**。
 
 其数学表达为：
@@ -72,7 +71,7 @@ Reducer 接收两个参数：
 
 **为什么需要 Reducer？** 默认情况下，LangGraph 对状态字段采用**直接覆盖**策略。但在实际场景中，我们往往需要更复杂的更新逻辑——比如将新消息追加到对话历史末尾，而不是覆盖掉之前的消息。Reducer 正是为此而生。
 
-**1. 使用 `Annotated` 类型定义 Reducer（Python）**
+**使用 `Annotated` 类型定义 Reducer（Python）**
 在 Python 中，通过 `typing.Annotated` 将 Reducer 函数与状态字段绑定：
 
 ```python
@@ -89,9 +88,9 @@ class State(TypedDict):
 
 ---
 
-##### Reducer 类型与示例
+#### Reducer 类型与示例
 
-**1. 默认 Reducer：覆盖更新**
+**（1）默认 Reducer：覆盖更新**
 
 当状态字段**没有**指定 Reducer 时，默认行为是**直接覆盖**。
 
@@ -121,7 +120,7 @@ print(result)  # 输出: {'counter': 12}
 # node_a 返回 counter=6，node_b 返回 counter=12，后者覆盖前者
 ```
 
-**2. `operator.add`：数值累加**
+**（2）. `operator.add`：数值累加**
 
 适用于计数器、分数聚合、资源统计等场景。
 
@@ -151,7 +150,7 @@ result = graph.invoke({"total": 0})
 print(result)  # 输出: {'total': 15}  (0 + 10 + 5)
 ```
 
-**3. `add_messages`：消息列表追加**
+**（3）. `add_messages`：消息列表追加**
 
 这是 LangGraph 内置的**消息专用 Reducer**，专门用于对话系统。它会将新消息追加到消息列表末尾，并支持消息的去重、替换和删除。
 
@@ -181,7 +180,7 @@ print(result["messages"])
 # 新消息被追加，而不是覆盖
 ```
 
-**4. 自定义 Reducer**
+**（4）. 自定义 Reducer**
 
 当内置 Reducer 无法满足需求时，可以编写自定义逻辑。
 
@@ -230,7 +229,7 @@ class State(TypedDict):
 2. 通过 `Annotated`（Python）或 `Annotation`（JS）将 Reducer 与字段绑定
 3. 并行执行时必须为共享字段定义 Reducer，避免并发冲突
 
-#### 1.1.3 状态相关方法与参数
+### 1.3 状态相关方法与参数
 
 | 方法/属性 | 描述 | 示例 |
 | :--- | :--- | :--- |
@@ -241,9 +240,9 @@ class State(TypedDict):
 | **`.get_state(config)`** | 获取某个配置（如线程ID）下的当前状态，用于持久化和检查点。 | `current = graph.get_state({"configurable": {"thread_id": "1"}})` |
 | **`.update_state(config, values)`** | 手动更新指定配置下的状态。 | `graph.update_state(config, {"messages": [...]})` |
 
-### 1.2 Node节点
+## 二、 Node节点
 
-#### 1.2.1 节点的定义方式
+### 2.1 节点的定义方式
 
 在 LangGraph 中，**节点（Node）** 是图的基本执行单元，本质上是**接收当前状态（State）并返回更新后状态的 Python/TypeScript 函数**。每个节点负责完成一个特定的任务，例如调用 LLM、执行工具调用或进行条件判断。
 
@@ -281,7 +280,7 @@ def node_with_context(state: State, config: RunnableConfig) -> dict:
 
 
 
-#### 1.2.2 `add_node` 方法详解
+### 2.2 `add_node` 方法详解
 
 将节点添加到图中使用 `add_node` 方法：
 
@@ -335,7 +334,7 @@ result = graph.invoke({"x": 1})  # {'x': 2}
 
 ---
 
-#### 1.2.3 节点的高级用法
+### 2.3 节点的高级用法
 
 **1. 使用 `Command` 进行路由控制**
 节点可以返回 `Command` 对象，同时完成状态更新和路由跳转：
@@ -367,7 +366,7 @@ builder.add_node("tools", tool_node)
 ```
 
 
-#### 1.2.4 完整示例
+### 2.4 完整示例
 **构建一个简单聊天机器人**
 ```python
 from typing_extensions import TypedDict
@@ -413,11 +412,11 @@ result = graph.invoke({
 print(result)
 ```
 
-### 1.3 边（Edges）
+## 三、边（Edges）
 
 在 LangGraph 中，**边（Edges）** 是连接**节点（Nodes）**、定义程序执行流向的核心组件。简单来说，`Nodes` 负责“做什么”，而 `Edges` 负责“接下来做什么”。
 
-#### 1.3.1 核心方法
+### 3.1 核心方法
 
 在 `StateGraph` 构建器中，主要通过两个方法来定义边：
 
@@ -452,7 +451,7 @@ LangGraph 预置了两个特殊节点常量：
     *   `path` 函数可以返回单个节点名（分支）或一个节点名列表（扇出，Fan-out）。
     *   若提供了 `path_map`，LangGraph 会根据映射关系找到目标节点。
 
-#### 1.3.2 代码示例
+### 3.2 代码示例
 
 **示例 1：普通边 (固定流转)**
 这个例子展示了如何使用 `add_edge` 构建一个简单的顺序工作流。
@@ -593,40 +592,78 @@ builder.add_conditional_edges(
 )
 ```
 
-#### 1.3.3 高级路由
 
-除了基本的条件边，LangGraph 还提供了更高级的控制流原语：
+## 四、控制流与并发
 
-*   **`Command`**: 允许节点在返回时**同时更新状态（State）并指定下一个节点**，逻辑更集中。
-*   **`Send`**: 用于**动态扇出（Dynamic Fan-out）**。条件边的路由函数可以返回一个 `Send` 对象列表，每个 `Send` 对象能携带不同的状态数据给不同的节点，实现 Map-Reduce 模式。
-*   **`interrupt()`**: 用于实现**人机协作（Human-in-the-loop）**，在节点执行过程中暂停图，等待外部输入后再继续。
+### 4.1 控制流
 
-**注意事项**
-*   **编译**：在添加完所有节点和边后，必须调用 `.compile()` 方法对图进行编译，才能执行。
-*   **状态更新**：节点函数需要返回一个**状态更新（State Update）**，LangGraph 会使用 `reducer` 函数（如果定义了）将此更新合并到全局状态中。
-*   **并行执行**：当一个节点通过多条普通边连接到多个后续节点时，这些后续节点会**并行执行**。
+控制流决定了“下一步做什么”，主要通过以下几种方式实现：
 
-简单来说，**普通边 (`add_edge`) 用于确定的、无分支的流程**，而 **条件边 (`add_conditional_edges`) 用于根据当前状态做出决策的动态流程**。理解并灵活运用这两种边，是构建复杂 LangGraph 应用的基础。
+*   **1. 顺序执行 (Sequential Execution)**
+    这是最基本的流程，通过**普通边（Normal Edge）** `add_edge` 连接节点，确保它们按固定顺序执行。
+    ```python
+    from langgraph.graph import StateGraph, START, END
+
+    builder = StateGraph(State)
+    builder.add_node("node_a", my_node_a)
+    builder.add_node("node_b", my_node_b)
+    builder.add_edge(START, "node_a") # 从 START 到 node_a
+    builder.add_edge("node_a", "node_b") # node_a 执行完后到 node_b
+    builder.add_edge("node_b", END) # node_b 执行完后结束
+    graph = builder.compile()
+    ```
+
+*   **2. 条件分支 (Conditional Branching)**
+    允许根据当前状态动态选择下一个要执行的节点。通过**条件边（Conditional Edge）** `add_conditional_edges` 实现，路由函数返回一个表示下一个节点名称的字符串。
+    ```python
+    from langgraph.graph import StateGraph, START, END
+
+    def routing_function(state: State) -> str:
+        if state["user_input"] == "help":
+            return "help_node"
+        else:
+            return "process_node"
+
+    builder = StateGraph(State)
+    builder.add_node("help_node", help_func)
+    builder.add_node("process_node", process_func)
+    builder.add_conditional_edges(START, routing_function) # 条件路由
+    # 可以指定路由映射
+    # builder.add_conditional_edges(START, routing_function, {"help_node": "help_node", "process_node": "process_node"})
+    graph = builder.compile()
+    ```
+
+*   **3. 循环与递归 (Cycles / Recursion)**
+    LangGraph 支持在图中创建循环，非常适合实现 ReAct 代理这类需要“思考-行动-观察”迭代的场景。循环可以通过在节点间添加一条或多条边，形成闭环来实现。
+    ```python
+    # 接上例，如果 process_node 处理完后，根据状态决定是结束还是回到某个节点
+    def after_process_routing(state: State) -> str:
+        if state["task_complete"]:
+            return END
+        else:
+            return "agent_node" # 回到之前的节点，形成循环
+
+    builder.add_conditional_edges("process_node", after_process_routing)
+    ```
+
+*   **4. 高级控制：`Command` API**
+    `Command` 对象允许一个节点在返回时，**同时更新状态（State）并指定下一个要前往的节点**。这可以替代条件边，实现更动态、更集中的路由控制。
+    ```python
+    from langgraph.types import Command
+
+    def smart_node(state: State):
+        if state["urgent"]:
+            # 更新状态并直接跳转到 fast_track 节点
+            return Command(update={"priority": "high"}, goto="fast_track")
+        else:
+            return Command(update={"priority": "low"}, goto="normal_track")
+    ```
+    *   **参数**：
+        *   `update` (dict): 要合并到全局状态中的数据。
+        *   `goto` (str): 下一个要执行的节点的名称。
 
 
-## 二、边的高级用法（Command和Send）
-
-### 2.1 介绍
-
-`Command` 和 `Send` 是 LangGraph 中用于实现**动态控制流**的两种高级原语，它们解决了传统“节点-边”静态结构无法灵活应对的复杂场景。
-
-简单来说，`Command` 侧重于 **“节点内部自主决策下一站”** ，而 `Send` 侧重于 **“动态创建并行任务”** 。下表可以帮你快速理解它们的核心区别：
-
-| 特性 | `Command` | `Send` |
-| :--- | :--- | :--- |
-| **核心作用** | 节点在执行完毕后，**自主决定**下一步去哪个节点。 | 在条件边中，**动态地、并行地**将任务派发给一个或多个节点。 |
-| **使用场景** | 多智能体交接、节点内动态路由、替代简单的条件边。 | Map-Reduce 模式、批量数据处理、需要并行执行未知数量任务的场景。 |
-| **返回位置** | 在**节点函数内部**直接返回。 | 在**条件边的路由函数**中返回一个列表。 |
-| **关键参数** | `update` (状态更新), `goto` (目标节点)。 | `node` (目标节点名), `arg` (传递给该节点的状态)。 |
-
----
-
-### 2.2 Command
+### 4.2 Command
 
 `Command` 允许一个节点在返回时，**同时完成两件事**：更新状态 (`update`) 和指定下一个要执行的节点 (`goto`)。这使得流程控制逻辑从“边”转移到了“节点”内部，更加灵活和直观。
 
@@ -697,7 +734,7 @@ def agent_router(state):
 
 ---
 
-### 2.3 Send：动态并行的“任务分派器”
+### 4.3 Send 动态并行
 
 你是一个项目经理，今天要处理一个任务清单：
 ```
