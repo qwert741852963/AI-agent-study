@@ -1117,6 +1117,310 @@ LangGraph的人机交互支持多种模式：
 总而言之，LangGraph通过`interrupt`和`Command`这一对精巧的API，配合持久化的检查点机制，为构建安全、可控的AI应用提供了强大而灵活的人机协作能力。
 
 
+## 七、子图
+
+在LangGraph中，**子图（Subgraph）本质上是一个被当作节点（Node）嵌入到另一个图（父图）中的图**。它的核心价值在于通过模块化设计，将复杂的工作流拆解为一个个独立、可复用的逻辑单元。
+
+
+### 7.1 不同状态模式
+
+*   **适用场景**：父图和子图的状态完全独立，没有共享的键。这常用于需要为每个Agent维护私有历史记录的多智能体系统。
+*   **用法**：你需要定义一个**包装函数（Wrapper Function）** 作为父图的节点。在这个函数内部：
+    1.  从父图状态中提取所需数据。
+    2.  将其转换为子图所期望的输入状态格式。
+    3.  调用 `subgraph.invoke()` 执行子图。
+    4.  获取子图的输出结果。
+    5.  将结果转换回父图状态的格式，并返回更新。
+
+*   **状态查看**：开启持久化（Checkpointer）后，可通过 `graph.get_state(config, subgraphs=True)` 查看子图的内部状态。
+*   **流式输出**：在父图调用 `.stream(..., subgraphs=True)` 时，可以同时获取父图和所有子图的流式输出事件。事件会以 `(命名空间, 数据)` 的元组形式返回，其中`命名空间`标识了事件来自哪个层级的哪个节点。
+*   **嵌套子图**：子图内部还可以再包含子图，形成多层嵌套结构，用于处理极其复杂的业务逻辑。
+*   **检查点（Checkpoint）**：
+    *   通常建议**只为父图配置检查点（Checkpointer）**，以避免状态重复存储。
+    *   编译子图时也可以传入 `checkpointer` 参数，但这在需要为子图实现独立的 `interrupt()` 中断逻辑时尤为重要。
+    *   如果多个图共享同一个检查点和 `thread_id`，它们的状态可能会被合并。若需隔离，可以为每个图分配独立的 `checkpointer` 实例。
+
+这个例子中，父图状态有 `user_input` 键，子图状态有 `sub_input` 键，两者完全独立。
+
+```python
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# 1. 定义不同的状态
+class ParentState(TypedDict):
+    user_input: str
+
+class SubgraphState(TypedDict):
+    sub_input: str
+
+# 2. 定义子图
+# 子图节点：处理自己的状态
+def subgraph_node(state: SubgraphState):
+    return {"sub_input": f"子图处理: {state['sub_input']}"}
+
+subgraph_builder = StateGraph(SubgraphState)
+subgraph_builder.add_node("subgraph_node", subgraph_node)
+subgraph_builder.add_edge(START, "subgraph_node")
+subgraph_builder.add_edge("subgraph_node", END)
+subgraph = subgraph_builder.compile()
+
+# 3. 定义父图
+def wrapper_node(state: ParentState):
+    # 关键点1: 将父状态转换为子状态
+    sub_input = {"sub_input": state["user_input"]}
+    
+    # 关键点2: 调用子图
+    sub_output = subgraph.invoke(sub_input)
+    
+    # 关键点3: 将子图输出转换回父状态
+    return {"user_input": sub_output["sub_input"]}
+
+builder = StateGraph(ParentState)
+builder.add_node("wrapper_node", wrapper_node) # 添加包装函数作为节点
+builder.add_edge(START, "wrapper_node")
+builder.add_edge("wrapper_node", END)
+graph = builder.compile()
+
+# 4. 执行
+initial_state = {"user_input": "你好世界"}
+final_state = graph.invoke(initial_state)
+print(final_state["user_input"])
+# 输出: 子图处理: 你好世界
+```
+
+
+### 7.2 共享状态模式
+
+*   **适用场景**：父图和子图的状态模式（State Schema）有共同的键（Key），例如共享一个 `messages` 列表。
+*   **用法**：这是最直接的方式。你只需将编译好的子图实例作为节点，通过父图的 `.add_node()` 方法添加即可。子图可以直接读写父图状态中共享的键。
+*   **优点**：代码简洁，无需手动进行状态转换。
+
+#### 单子图
+
+```python
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# 1. 定义共享的状态
+class SharedState(TypedDict):
+    messages: list
+
+# 2. 定义子图
+# 子图节点：向共享的 messages 中添加一条消息
+def subgraph_node(state: SharedState):
+    return {"messages": state["messages"] + ["来自子图的消息"]}
+
+# 构建子图
+subgraph_builder = StateGraph(SharedState)
+subgraph_builder.add_node("subgraph_node", subgraph_node)
+subgraph_builder.add_edge(START, "subgraph_node")
+subgraph_builder.add_edge("subgraph_node", END)
+# 编译子图
+subgraph = subgraph_builder.compile()
+
+# 3. 定义父图
+builder = StateGraph(SharedState)
+
+# 关键点：直接将编译好的子图作为节点添加
+builder.add_node("subgraph", subgraph) 
+
+# 设置入口和出口
+builder.add_edge(START, "subgraph")
+builder.add_edge("subgraph", END)
+
+# 编译父图
+graph = builder.compile()
+
+# 4. 执行
+initial_state = {"messages": ["初始消息"]}
+final_state = graph.invoke(initial_state)
+print(final_state["messages"])
+# 输出: ['初始消息', '来自子图的消息']
+```
+
+####  多子图
+
+多个子图为什么能共享logs属性
+在LangGraph中，父图和子图之所以能共享 `logs` 这个键，核心原因在于**它们使用了相同的状态键名（`logs`）**，且这个键在父图和子图的状态模式（State Schema）中都存在。当子图作为节点被添加到父图中时，LangGraph会将父图的整个状态对象传递给子图，子图可以读取其中的 `logs`，并返回一个包含更新后 `logs` 的字典，这个更新会通过预定义的**Reducer**安全地合并回父图状态。
+
+### 🧩 状态传递与合并机制
+
+1. **状态对象在图中流动**：在LangGraph中，所有节点（包括子图）都接收一个状态对象（State）作为输入，并返回一个部分更新的状态字典。对于子图节点，父图会把它的当前状态对象传递给子图的入口节点。
+2. **键匹配决定共享**：如果子图的状态模式（如 `FailureAnalysisState`）和父图的状态模式（如 `EntryGraphState`）都声明了名为 `logs` 的键，那么子图在执行过程中就可以通过 `state["logs"]` 访问父图中的 `logs` 数据。
+3. **更新通过Reducer合并**：子图执行后返回的字典（例如 `{"logs": new_logs_list}`）会被父图接收。父图在更新自己的状态时，会检查 `logs` 键是否定义了**Reducer函数**（通过 `Annotated[Type, reducer]` 声明）。如果定义了，就会调用这个函数来合并新旧列表，而不是直接覆盖。这个合并过程是**幂等且可配置的**，确保了并行执行或多次更新时数据的一致性。
+
+### 🛡️ Reducer 的作用（关键安全锁）
+
+**子图和父图为什么能共享logs属性**
+要让共享正常工作，必须满足以下几点：
+1. **键名完全一致**：父图和子图状态中 `logs` 的键名必须一模一样。
+2. **类型兼容**：子图读取时，必须能正确解析父图传入的该键的数据类型（例如都是 `list[Logs]`）。
+3. **Reducer一致性**：父图和子图对同一个键最好定义相同的Reducer（或至少兼容的合并逻辑），否则可能会出现合并冲突。
+
+
+下面用一个处理系统日志的完整示例来演示，该系统会接收一批日志，然后并行地进行两项分析：
+1.  **失败分析子图**：找出其中有问题的日志并生成报告。
+2.  **问题总结子图**：对所有日志的问题进行总结。
+
+
+**（1）定义共享状态与Reducer**
+首先，定义父图和子图共享的状态。由于多个子图都可能修改**共享的 `logs`** 列表，必须定义一个`reducer`函数来安全地合并这些修改。
+
+```python
+from typing import TypedDict, Optional, Annotated
+from langgraph.graph import StateGraph, START, END
+
+# 定义单条日志的结构
+class Logs(TypedDict):
+    id: str
+    question: str
+    answer: str
+    grade: Optional[int]  # 1表示合格，0表示不合格
+    feedback: Optional[str]
+
+# 自定义Reducer：用于合并来自不同节点的日志列表更新
+def add_logs(left: list[Logs], right: list[Logs]) -> list[Logs]:
+    if not left: left = []
+    if not right: right = []
+    logs = left.copy()
+    # 用新日志更新旧日志，或追加新日志
+    left_id_to_idx = {log["id"]: idx for idx, log in enumerate(logs)}
+    for log in right:
+        idx = left_id_to_idx.get(log["id"])
+        if idx is not None:
+            logs[idx] = log
+        else:
+            logs.append(log)
+    return logs
+```
+
+**（2）定义子图1：失败分析 (Failure Analysis)**
+
+这个子图负责筛选出所有不合格的日志（`grade == 0`），并生成一份失败报告。
+
+```python
+# 失败分析子图的状态，它共享了父图的 'logs' 键
+class FailureAnalysisState(TypedDict):
+    logs: Annotated[list[Logs], add_logs]  # 共享状态键
+    failure_report: str                    # 子图私有键
+
+def get_failures(state: FailureAnalysisState):
+    failures = [log for log in state["logs"] if log["grade"] == 0]
+    return {"failures": failures}
+
+def generate_summary(state: FailureAnalysisState):
+    failures = state["failures"]
+    failure_ids = [log["id"] for log in failures]
+    fa_summary = f"检索质量差的文档ID: {', '.join(failure_ids)}"
+    return {"failure_report": fa_summary}
+
+# 构建并编译失败分析子图
+fa_builder = StateGraph(FailureAnalysisState)
+fa_builder.add_node("get_failures", get_failures)
+fa_builder.add_node("generate_summary", generate_summary)
+fa_builder.add_edge(START, "get_failures")
+fa_builder.add_edge("get_failures", "generate_summary")
+fa_builder.add_edge("generate_summary", END)
+failure_analysis_subgraph = fa_builder.compile()
+```
+
+**（3）定义子图2：问题总结 (Question Summarization)**
+
+这个子图负责对所有日志的问题进行总结，并生成一份总结报告。
+
+```python
+# 问题总结子图的状态，它也共享了父图的 'logs' 键
+class QuestionSummarizationState(TypedDict):
+    logs: Annotated[list[Logs], add_logs]  # 共享状态键
+    summary_report: str                    # 子图私有键
+
+def generate_summary(state: QuestionSummarizationState):
+    # 实际场景中可调用LLM进行总结
+    summary = "问题主要集中在ChatOllama和Chroma向量库的使用上。"
+    return {"summary": summary}
+
+def send_to_slack(state: QuestionSummarizationState):
+    summary = state["summary"]
+    # 实际场景中可将报告发送到Slack
+    return {"summary_report": summary}
+
+# 构建并编译问题总结子图
+qs_builder = StateGraph(QuestionSummarizationState)
+qs_builder.add_node("generate_summary", generate_summary)
+qs_builder.add_node("send_to_slack", send_to_slack)
+qs_builder.add_edge(START, "generate_summary")
+qs_builder.add_edge("generate_summary", "send_to_slack")
+qs_builder.add_edge("send_to_slack", END)
+question_summarization_subgraph = qs_builder.compile()
+```
+
+**（4）组装父图**
+
+最后，将两个编译好的子图作为节点添加到父图中。因为大家共享 `logs` 键，所以可以直接添加，无需额外的状态转换函数。
+
+```python
+# 父图的状态，包含了所有共享和最终报告的键
+class EntryGraphState(TypedDict):
+    raw_logs: Annotated[list[Logs], add_logs]
+    logs: Annotated[list[Logs], add_logs]     # 供子图使用
+    failure_report: str                       # 来自子图1
+    summary_report: str                       # 来自子图2
+
+def select_logs(state):
+    # 从原始日志中筛选出包含评分（grade）的日志
+    return {"logs": [log for log in state["raw_logs"] if "grade" in log]}
+
+# 构建父图
+entry_builder = StateGraph(EntryGraphState)
+entry_builder.add_node("select_logs", select_logs)
+# 关键点：直接将编译好的子图作为节点添加
+entry_builder.add_node("failure_analysis", failure_analysis_subgraph)
+entry_builder.add_node("question_summarization", question_summarization_subgraph)
+
+# 定义流程：先筛选，然后两个子图并行执行
+entry_builder.add_edge(START, "select_logs")
+entry_builder.add_edge("select_logs", "failure_analysis")
+entry_builder.add_edge("select_logs", "question_summarization")
+entry_builder.add_edge("failure_analysis", END)
+entry_builder.add_edge("question_summarization", END)
+
+# 编译父图
+graph = entry_builder.compile()
+```
+
+**（5）执行与结果**
+
+提供一些示例日志并执行。
+
+```python
+dummy_logs = [
+    Logs(id="1", question="如何导入ChatOllama?", grade=1, answer="使用 'from langchain_community.chat_models import ChatOllama'"),
+    Logs(id="2", question="如何使用Chroma向量库?", grade=0, answer="定义rag_chain...", feedback="检索到的文档未提及Chroma"),
+    Logs(id="3", question="如何在LangGraph中创建ReAct代理?", grade=1, answer="from langgraph.prebuilt import create_react_agent"),
+]
+
+final_state = graph.invoke({"raw_logs": dummy_logs})
+print(final_state["failure_report"])
+# 输出: 检索质量差的文档ID: 2
+print(final_state["summary_report"])
+# 输出: 问题主要集中在ChatOllama和Chroma向量库的使用上。
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
