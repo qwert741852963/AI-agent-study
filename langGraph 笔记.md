@@ -2495,10 +2495,415 @@ print(final_state["messages"][-1].content)
 ---
 
 
+### 10.7 多智能体协作
+
+| 协作模式 | 核心机制 | 优点 | 缺点 | 适用场景 |
+| :--- | :--- | :--- | :--- | :--- |
+| **主管-执行者** | 中央路由，任务分派 | 流程清晰，易于控制 | 主管是瓶颈和单点故障 | 任务明确、流程固定的业务，如客服、数据处理 |
+| **对等/群组** | 智能体间动态移交 | 灵活、去中心化 | 通信复杂，难以调试 | 探索性、开放式任务，如研究、创意生成 |
+| **层级模式** | 多层级的“主管-执行者” | 可管理超大规模系统 | 设计复杂，有延迟 | 跨产品线、跨部门的大型企业级系统 |
+| **全连接网络** | 任意智能体直接通信 | 信息共享最充分 | 通信爆炸，不可扩展 | 仅适用于少量（<5个）智能体的高度协作场景 |
+
+
+**1. 主管-执行者模式 (Supervisor-Workers)**
+
+这是最经典的模式，由一个**中央主管智能体**负责接收任务、进行拆解，并分派给不同的**专业执行者智能体**，最后汇总结果。
+
+*   **优点**：中央协调，流程清晰，易于控制。
+*   **缺点**：主管智能体可能成为性能瓶颈和单点故障风险。
+
+**2. 对等/群组模式 (Peer-to-Peer / Swarm)**
+
+所有智能体地位平等，通过**移交（Handoffs）** 机制动态地将控制权从一个智能体传递给另一个。系统会记住当前活跃的智能体以维持对话的连续性。
+
+*   **优点**：去中心化，灵活性强，适合探索性任务。
+*   **缺点**：通信复杂，难以调试，可能出现“死循环”。
+
+**3. 层级模式 (Hierarchical)**
+
+可以看作是“主管-执行者”模式的递归或扩展。顶层有总主管，向下管理多个子团队，每个子团队内部又有自己的主管和执行者。
+
+*   **优点**：适合超大规模系统，能有效管理复杂性。
+*   **缺点**：架构设计复杂，层级间的信息传递有延迟。
+
+**4. 全连接网络模式 (Fully Connected Network)**
+
+所有智能体之间都可以**直接、自由地通信**。
+
+*   **优点**：信息共享最充分，理论上能实现最高效的协作。
+*   **缺点**：**通信复杂度呈指数级增长**，当智能体数量超过5个时系统将难以维护。
+
+
+---
+
+
+#### 主管-执行者模式
+
+这是最经典的模式，由一个**中央主管智能体**负责接收任务、进行拆解，并分派给不同的**专业执行者智能体**，最后汇总结果。
+
+*   **优点**：中央协调，流程清晰，易于控制。
+*   **缺点**：主管智能体可能成为性能瓶颈和单点故障风险。
+
+```mermaid
+graph TD
+    User[用户] --> Supervisor[👤 主管智能体]
+    
+    subgraph Supervisor_Logic [协调逻辑]
+        Supervisor -->|任务分解与分派| Worker1[👨‍💻 执行者 A]
+        Supervisor -->|任务分解与分派| Worker2[👩‍💻 执行者 B]
+        Supervisor -->|任务分解与分派| Worker3[🧑‍💻 执行者 C]
+        Worker1 -->|返回结果| Supervisor
+        Worker2 -->|返回结果| Supervisor
+        Worker3 -->|返回结果| Supervisor
+    end
+
+    Supervisor -->|汇总结果| User
+```
+
+```python
+# 安装依赖: pip install langgraph-supervisor langchain-openai
+from langchain_openai import ChatOpenAI
+from langgraph_supervisor import create_supervisor
+from langgraph.prebuilt import create_react_agent
+
+# 1. 初始化模型
+model = ChatOpenAI(model="gpt-4o")
+
+# 2. 定义专用工具
+def add(a: float, b: float) -> float:
+    """加法"""
+    return a + b
+
+def web_search(query: str) -> str:
+    """模拟网络搜索"""
+    return f"关于 '{query}' 的搜索结果..."
+
+# 3. 创建专用的执行者智能体 (Workers)
+math_agent = create_react_agent(
+    model=model,
+    tools=[add],
+    name="math_expert",
+    prompt="你是一位数学专家。"
+)
+
+research_agent = create_react_agent(
+    model=model,
+    tools=[web_search],
+    name="research_expert",
+    prompt="你是一位研究专家，可以进行网络搜索。"
+)
+
+# 4. 创建主管智能体 (Supervisor) 和工作流
+workflow = create_supervisor(
+    agents=[research_agent, math_agent], # 管理哪些执行者
+    model=model,
+    prompt="你是一个主管，管理着研究专家和数学专家。"
+)
+
+# 5. 编译并运行
+app = workflow.compile()
+result = app.invoke({
+    "messages": [{"role": "user", "content": "25 * 4 等于多少？"}]
+})
+
+# 输出结果
+for message in result["messages"]:
+    print(f"{message.type}: {message.content}")
+```
 
 
 
+---
 
+
+#### 对等/群组模式
+
+所有智能体地位平等，通过**移交（Handoffs）** 机制动态地将控制权从一个智能体传递给另一个。系统会记住当前活跃的智能体以维持对话的连续性。
+
+*   **优点**：去中心化，灵活性强，适合探索性任务。
+*   **缺点**：通信复杂，难以调试，可能出现“死循环”。
+
+```mermaid
+graph TD
+    User[用户] -->|发起请求| AgentA[🤖 智能体 A]
+    
+    subgraph Swarm [对等群组]
+        AgentA -->|移交控制权| AgentB[🤖 智能体 B]
+        AgentB -->|移交控制权| AgentC[🤖 智能体 C]
+        AgentC -->|移交控制权| AgentA
+    end
+
+    AgentA -->|返回最终结果| User
+```
+
+核心机制：每个智能体都知道如何将任务“移交”给其他更合适的同伴，从而实现去中心化的协作。
+
+代码示例：以下示例使用 langgraph-swarm 库，创建了Alice和Bob两个智能体，它们可以通过 create_handoff_tool 互相移交任务。
+
+```python
+# 安装依赖: pip install langgraph-swarm langchain-openai
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain.agents import create_agent
+from langgraph_swarm import create_handoff_tool, create_swarm
+
+# 1. 初始化模型
+model = ChatOpenAI(model="gpt-4o")
+
+# 2. 定义工具
+def add(a: int, b: int) -> int:
+    """加法"""
+    return a + b
+
+# 3. 创建对等的智能体 (Agents)
+# Alice: 加法专家，可以将任务移交给Bob
+alice = create_agent(
+    model,
+    tools=[
+        add,
+        create_handoff_tool(
+            agent_name="Bob",
+            description="将任务移交给Bob"
+        ),
+    ],
+    system_prompt="你是Alice，一位加法专家。",
+    name="Alice",
+)
+
+# Bob: 可以接收任务，也可以将任务移交回Alice
+bob = create_agent(
+    model,
+    tools=[
+        create_handoff_tool(
+            agent_name="Alice",
+            description="将任务移交给Alice，她擅长数学"
+        ),
+    ],
+    system_prompt="你是Bob。",
+    name="Bob",
+)
+
+# 4. 创建Swarm工作流
+checkpointer = InMemorySaver()
+workflow = create_swarm(
+    [alice, bob],
+    default_active_agent="Alice" # 设置默认起始智能体
+)
+app = workflow.compile(checkpointer=checkpointer)
+
+# 5. 运行示例
+config = {"configurable": {"thread_id": "1"}}
+
+# 用户请求先和Bob对话
+turn_1 = app.invoke(
+    {"messages": [{"role": "user", "content": "我想和Bob说话。"}]},
+    config,
+)
+print(turn_1)
+
+# 接着询问数学问题，Alice会处理
+turn_2 = app.invoke(
+    {"messages": [{"role": "user", "content": "5 + 7 等于多少？"}]},
+    config,
+)
+print(turn_2)
+```
+
+
+---
+
+
+#### 层级模式
+
+可以看作是“主管-执行者”模式的递归或扩展。顶层有总主管，向下管理多个子团队，每个子团队内部又有自己的主管和执行者。
+
+*   **优点**：适合超大规模系统，能有效管理复杂性。
+*   **缺点**：架构设计复杂，层级间的信息传递有延迟。
+
+```mermaid
+graph TD
+    User[用户] --> TopSupervisor[👤 顶层主管]
+
+    subgraph Team_A [团队 A]
+        TopSupervisor -->|管理| SubSupervisorA[👤 子主管 A]
+        SubSupervisorA --> WorkerA1[👨‍💻 执行者 A1]
+        SubSupervisorA --> WorkerA2[👩‍💻 执行者 A2]
+    end
+
+    subgraph Team_B [团队 B]
+        TopSupervisor -->|管理| SubSupervisorB[👤 子主管 B]
+        SubSupervisorB --> WorkerB1[🧑‍💻 执行者 B1]
+        SubSupervisorB --> WorkerB2[👨‍💻 执行者 B2]
+    end
+
+    TopSupervisor -->|汇总结果| User
+```
+
+以下示例展示了一个概念性的实现，顶层主管协调“研究团队”和“文档编写团队”。
+
+```python
+# 这是一个概念性示例，展示了层级结构的构建思路
+# 实际实现可能需要更复杂的状态管理
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Annotated
+from langgraph.graph.message import add_messages
+
+# 1. 定义全局状态
+class OverallState(TypedDict):
+    messages: Annotated[list, add_messages]
+    next_team: str
+
+# 2. 初始化模型
+model = ChatOpenAI(model="gpt-4o")
+
+# --- 3. 定义子团队 (Sub-teams) ---
+# 3.1 研究团队 (Research Team)
+class ResearchState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+def research_supervisor_node(state: ResearchState):
+    # 研究团队的主管逻辑：决定由研究员A还是B来执行
+    # 为简化，此处直接返回
+    return {"messages": [("ai", "研究团队主管：分配任务给研究员。")]}
+
+def researcher_a_node(state: ResearchState):
+    return {"messages": [("ai", "研究员A：执行网络搜索...")]}
+
+def researcher_b_node(state: ResearchState):
+    return {"messages": [("ai", "研究员B：执行数据分析...")]}
+
+# 构建研究子图
+research_builder = StateGraph(ResearchState)
+research_builder.add_node("research_supervisor", research_supervisor_node)
+research_builder.add_node("researcher_a", researcher_a_node)
+research_builder.add_node("researcher_b", researcher_b_node)
+research_builder.set_entry_point("research_supervisor")
+research_builder.add_edge("research_supervisor", "researcher_a") # 简化路由
+research_builder.add_edge("researcher_a", END)
+research_subgraph = research_builder.compile()
+
+# 3.2 文档编写团队 (Document Team)
+# ... 类似地构建 doc_writing_subgraph ...
+
+# --- 4. 构建顶层图 ---
+def top_supervisor_node(state: OverallState):
+    # 顶层主管决定将任务分配给哪个子团队
+    return {"next_team": "research"} # 简化决策
+
+builder = StateGraph(OverallState)
+builder.add_node("top_supervisor", top_supervisor_node)
+# 将子图作为节点添加到顶层图中
+builder.add_node("research_team", research_subgraph)
+# builder.add_node("doc_team", doc_writing_subgraph)
+
+builder.set_entry_point("top_supervisor")
+builder.add_conditional_edges(
+    "top_supervisor",
+    lambda state: state["next_team"],
+    {
+        "research": "research_team",
+        # "doc": "doc_team",
+    }
+)
+builder.add_edge("research_team", END)
+
+# 5. 编译并运行
+app = builder.compile()
+# result = app.invoke({"messages": [("user", "帮我研究一下LangGraph")]})
+# print(result)
+```
+
+
+---
+
+
+#### 全连接网络模式
+
+所有智能体之间都可以**直接、自由地通信**。
+
+*   **优点**：信息共享最充分，理论上能实现最高效的协作。
+*   **缺点**：**通信复杂度呈指数级增长**，当智能体数量超过5个时系统将难以维护。
+
+
+```mermaid
+graph TD
+    AgentA[🤖 智能体 A]
+    AgentB[🤖 智能体 B]
+    AgentC[🤖 智能体 C]
+    AgentD[🤖 智能体 D]
+
+    AgentA <-->|直接通信| AgentB
+    AgentA <-->|直接通信| AgentC
+    AgentA <-->|直接通信| AgentD
+    AgentB <-->|直接通信| AgentC
+    AgentB <-->|直接通信| AgentD
+    AgentC <-->|直接通信| AgentD
+```
+*(注：当智能体增多时，连线会急速增加，导致图变得混乱不可读。)*
+
+
+核心机制：一个去中心化的网络，每个智能体都知晓其他智能体的存在，并可直接向其发送消息或请求协助。
+
+代码示例：以下示例使用LangGraph的功能性API，构建了一个旅行助手网络，其中 travel_advisor 和 hotel_advisor 可以互相调用。
+
+```python
+# 安装依赖: pip install -U langgraph langchain-anthropic
+from langchain_anthropic import ChatAnthropic
+from langgraph.func import entrypoint, task
+from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
+
+# 1. 初始化模型
+model = ChatAnthropic(model="claude-3-5-sonnet-latest")
+
+# 2. 定义工具及移交工具 (return_direct=True 可让智能体调用后立即退出)
+@tool(return_direct=True)
+def transfer_to_hotel_advisor():
+    """将用户移交给酒店顾问"""
+    return "正在移交给酒店顾问..."
+
+@tool
+def get_travel_recommendations(destination: str) -> str:
+    """获取旅行目的地推荐"""
+    return f"推荐你前往 {destination}，那里很棒！"
+
+# 3. 创建智能体任务
+@task
+def call_travel_advisor(messages):
+    """旅行顾问智能体"""
+    agent = create_react_agent(
+        model,
+        tools=[get_travel_recommendations, transfer_to_hotel_advisor],
+        prompt="你是旅行顾问，如果需要酒店信息，可以调用 transfer_to_hotel_advisor。"
+    )
+    response = agent.invoke({"messages": messages})
+    return response["messages"]
+
+@task
+def call_hotel_advisor(messages):
+    """酒店顾问智能体"""
+    agent = create_react_agent(
+        model,
+        tools=[], # 假设有酒店相关工具
+        prompt="你是酒店顾问。"
+    )
+    response = agent.invoke({"messages": messages})
+    return response["messages"]
+
+# 4. 定义主工作流 (entrypoint)
+@entrypoint()
+def travel_network(messages):
+    # 简单路由，可以根据消息内容动态调用不同智能体
+    # 此处为了展示全连接，仅调用旅行顾问
+    result = call_travel_advisor(messages).result()
+    return result
+
+# 5. 编译并运行
+app = travel_network.compile()
+# result = app.invoke([("user", "我想去日本旅游，有什么推荐？")])
+# print(result)
+```
 
 
 
