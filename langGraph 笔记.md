@@ -2284,6 +2284,217 @@ print(result["messages"][-1].content)
 ```
 
 
+### 10.6 反思/评估器-优化器
+
+
+这个模式模拟了人类通过“打草稿-寻求反馈-修改完善”来精进工作的过程。它不是一次性生成答案，而是通过多轮迭代，让AI像一位严谨的编辑一样，反复审视和打磨自己的作品。
+
+**核心机制：一个“生成-评判-优化”的闭环**
+
+这个“生成 → 评估 → 优化 → 再评估”的循环会一直进行，直到输出满足预设的质量标准或达到最大迭代次数为止。
+
+### 🚀 典型应用场景
+
+*   **内容创作与润色**：文章、报告、邮件等的起草和优化。
+*   **代码生成与审查**：生成代码后，由评审（或工具如`Pyright`）检查错误，再自动修正，直到代码无误。
+*   **翻译质量提升**：进行“翻译 → 评估 → 重译”的循环，确保翻译的准确性。
+*   **检索增强生成 (RAG) 优化**：评估检索到的文档相关性，若质量不高则触发二次检索或查询重写。
+*   **复杂问题求解**：对初步解决方案进行评估，发现漏洞并提出更完善的方案。
+  
+
+
+**例子一：简单例子**
+
+使用 `langgraph-reflection` 预构建包 (推荐)
+
+1.  **安装**：
+    ```bash
+    pip install langgraph-reflection
+    ```
+
+2.  **核心思路**：你需要定义两个核心图：
+    *   **主智能体 (Main Agent)**：负责解决问题的“生成器”。
+    *   **评判智能体 (Critique Agent)**：负责审查主智能体工作并提出修改意见的“评估器”。
+
+```python
+from langgraph.graph import StateGraph, MessagesState
+from langgraph_reflection import create_reflection_graph
+from langchain.agents import create_agent
+# ... 其他导入
+
+# 1. 定义你的主智能体 (生成器)
+# 这可以是一个简单的agent，也可以是复杂的图
+assistant_graph = create_agent(model="gpt-4o", tools=[...])
+
+# 2. 定义你的评判函数 (评估器)
+def judge_response(state: MessagesState, config):
+    """使用另一个LLM作为评审来评估回答质量"""
+    # 这里你可以调用一个LLM，让它根据预定义标准（准确性、完整性等）来评审
+    # 如果评审通过，不返回任何消息；否则，返回一个包含修改意见的用户消息
+    # ... 实现评审逻辑
+    if eval_result["score"]:
+        # 评审通过，不返回消息，循环结束
+        return 
+    else:
+        # 评审不通过，返回修改意见，触发新一轮生成
+        return {"messages": [{"role": "user", "content": eval_result["comment"]}]}
+
+# 3. 创建评审图
+judge_graph = StateGraph(MessagesState)
+judge_graph.add_node(judge_response)
+# ... (配置judge_graph)
+
+# 4. 将主智能体和评审图组合成反思图
+reflection_app = create_reflection_graph(assistant_graph, judge_graph)
+
+# 5. 调用反思应用
+result = reflection_app.invoke({"messages": [{"role": "user", "content": "请写一首关于春天的诗。"}]})
+print(result["messages"][-1].content)
+```
+
+
+**例子二：“编写-审查-修改”闭环**
+
+这个系统会模拟一个完整的“编写-审查-修改”闭环，你可以直接运行和测试。
+
+首先，确保安装必要的库：
+
+```bash
+pip install langgraph-reflection langchain langchain-openai
+```
+
+然后，导入所需的模块：
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, MessagesState
+from langgraph_reflection import create_reflection_graph
+```
+
+第一步：定义主智能体 (生成器)
+
+主智能体负责根据任务生成或修改代码。这里我们用 `StateGraph` 构建一个简单的生成器节点。
+
+```python
+# 1. 初始化模型
+model = ChatOpenAI(model="gpt-4o")
+
+# 2. 定义生成器节点
+def generate_code_node(state: MessagesState):
+    """根据当前对话历史生成代码。"""
+    # 从状态中获取最新的用户消息作为任务
+    last_user_message = next(
+        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), 
+        None
+    )
+    task = last_user_message.content if last_user_message else "请编写一个Python函数。"
+    
+    # 调用LLM生成代码
+    response = model.invoke([
+        SystemMessage(content="你是一个专业的Python程序员。请提供高质量的代码，并包含必要的注释。"),
+        HumanMessage(content=task)
+    ])
+    
+    # 返回新的消息，更新状态
+    return {"messages": [response]}
+
+# 3. 构建主智能体图
+assistant_graph = StateGraph(MessagesState)
+assistant_graph.add_node("generate_code", generate_code_node)
+assistant_graph.set_entry_point("generate_code")
+assistant_graph.set_finish_point("generate_code")
+assistant_graph = assistant_graph.compile()
+```
+
+第二步：定义评估器 (评审员)
+
+评估器的任务是检查主智能体的输出，并决定是“通过”还是给出修改意见。
+
+```python
+# 1. 定义评审函数
+def judge_code(state: MessagesState, config):
+    """使用LLM作为评审，评估代码质量。"""
+    
+    # 从状态中获取主智能体生成的最新代码
+    assistant_messages = [m for m in state["messages"] if m.type == "ai"]
+    if not assistant_messages:
+        return {}
+    code_to_review = assistant_messages[-1].content
+
+    # 定义评审标准
+    judge_prompt = f"""
+    你是一位严格的代码评审专家。请评审以下Python代码，并从以下几个方面给出反馈：
+    1.  **正确性**：代码逻辑是否正确，有无潜在bug？
+    2.  **效率**：算法是否高效，有无优化空间？
+    3.  **可读性**：代码风格是否清晰，注释是否充分？
+    4.  **健壮性**：是否考虑了边界情况和错误处理？
+
+    如果代码质量很高，无需修改，请仅回复 "APPROVED"。
+    否则，请提供具体、可操作的修改建议。
+
+    --- 待评审代码 ---
+    {code_to_review}
+    --- 评审结束 ---
+    """
+    
+    # 调用LLM进行评审
+    judge_response = model.invoke([HumanMessage(content=judge_prompt)])
+    critique = judge_response.content
+
+    # 核心逻辑：根据评审结果决定下一步
+    if "APPROVED" in critique:
+        # 如果通过，不返回任何消息，循环结束
+        print("✅ 代码评审通过！")
+        return {}
+    else:
+        # 否则，将评审意见作为用户消息返回，触发新一轮生成
+        print("⚠️ 代码需要改进，评审意见已返回。")
+        return {"messages": [HumanMessage(content=f"请根据以下评审意见修改代码：\n{critique}")]}
+
+# 2. 构建评审图
+judge_graph = StateGraph(MessagesState)
+judge_graph.add_node("judge_code", judge_code)
+judge_graph.set_entry_point("judge_code")
+judge_graph.set_finish_point("judge_code")
+judge_graph = judge_graph.compile()
+```
+
+第三步：组合成反思图
+
+最后，使用 `create_reflection_graph` 将主智能体和评审图组合成一个完整的反思工作流。
+
+```python
+# 将生成器和评审器组合成一个自我反思的应用
+reflection_app = create_reflection_graph(assistant_graph, judge_graph)
+```
+
+第四步：运行与测试
+
+现在，我们可以向这个智能体提出一个编码任务，看看它是如何工作的。
+
+```python
+# 定义一个包含多个问题的编码任务
+task = """
+请编写一个Python函数 `divide_list(numbers, divisor)`，它接收一个数字列表和一个除数， 
+返回列表中每个元素除以除数的结果（保留两位小数）。
+要求：
+1. 处理除数为0的情况。
+2. 处理空列表的情况。
+"""
+
+# 执行任务
+print("📝 开始执行任务...")
+final_state = reflection_app.invoke({"messages": [HumanMessage(content=task)]})
+
+# 打印最终生成的代码
+print("\n📄 最终代码:\n")
+print(final_state["messages"][-1].content)
+```
+
+
+
+
 
 
 
