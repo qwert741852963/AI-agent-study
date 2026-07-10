@@ -2739,6 +2739,7 @@ graph TD
     TopSupervisor -->|汇总结果| User
 ```
 
+**示例一：简单**
 以下示例展示了一个概念性的实现，顶层主管协调“研究团队”和“文档编写团队”。
 
 ```python
@@ -2812,6 +2813,261 @@ builder.add_edge("research_team", END)
 app = builder.compile()
 # result = app.invoke({"messages": [("user", "帮我研究一下LangGraph")]})
 # print(result)
+```
+
+**示例二：完整代码示例**
+
+1. 安装依赖与导入
+
+```python
+# 安装依赖: pip install langgraph langchain-openai tavily-python
+import os
+from typing import Annotated, List, Literal
+from typing_extensions import TypedDict
+
+from langchain_openai import ChatOpenAI
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import create_react_agent, ToolNode
+
+# 设置你的 API 密钥
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+os.environ["TAVILY_API_KEY"] = "your-tavily-api-key"
+
+model = ChatOpenAI(model="gpt-4o")
+```
+
+2. 定义工具
+
+```python
+# 研究团队工具：网络搜索
+search_tool = TavilySearchResults(max_results=3)
+
+# 文档编写团队工具：模拟文件操作
+def write_file(content: str, filename: str = "report.txt") -> str:
+    """将内容写入文件"""
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    return f"文件已保存为 {filename}"
+
+def read_file(filename: str = "report.txt") -> str:
+    """读取文件内容"""
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "文件不存在"
+```
+
+3. 定义团队内部的状态与主管
+
+**研究团队 (Research Team)**：内部有一个主管，管理“搜索专家”和“分析专家”。
+
+```python
+# ----- 研究团队的状态 -----
+class ResearchState(TypedDict):
+    messages: Annotated[list, add_messages]
+    next: str  # 路由决策
+
+# ----- 研究团队的主管节点 -----
+def research_supervisor(state: ResearchState):
+    """研究团队的主管：决定由谁执行"""
+    prompt = """你是一个研究团队的主管。
+    根据用户的问题，决定由哪位专家处理：
+    - "search_expert": 需要查找最新信息、事实、数据时
+    - "analyze_expert": 需要对已有信息进行总结、分析、提炼时
+    只返回专家名称。
+    """
+    response = model.invoke([
+        {"role": "system", "content": prompt},
+        *state["messages"]
+    ])
+    next_agent = response.content.strip().lower()
+    # 简单解析，确保返回有效的专家名称
+    if "search" in next_agent:
+        return {"next": "search_expert"}
+    else:
+        return {"next": "analyze_expert"}
+
+# ----- 研究团队的执行者 -----
+# 使用 prebuilt 创建 ReAct 智能体
+search_agent = create_react_agent(
+    model=model,
+    tools=[search_tool],
+    prompt="你是一位搜索专家，擅长查找网络信息。"
+)
+
+analyze_agent = create_react_agent(
+    model=model,
+    tools=[],  # 无工具，纯分析
+    prompt="你是一位分析专家，擅长总结和提炼信息。"
+)
+
+# ----- 构建研究子图 -----
+research_builder = StateGraph(ResearchState)
+research_builder.add_node("research_supervisor", research_supervisor)
+research_builder.add_node("search_expert", search_agent)
+research_builder.add_node("analyze_expert", analyze_agent)
+
+research_builder.add_edge(START, "research_supervisor")
+research_builder.add_conditional_edges(
+    "research_supervisor",
+    lambda state: state["next"],
+    {
+        "search_expert": "search_expert",
+        "analyze_expert": "analyze_expert",
+    }
+)
+research_builder.add_edge("search_expert", END)
+research_builder.add_edge("analyze_expert", END)
+
+research_graph = research_builder.compile()
+```
+
+**文档编写团队 (Document Team)**：内部有一个主管，管理“大纲撰写”和“内容撰写”执行者。
+
+```python
+# ----- 文档团队的状态 -----
+class DocumentState(TypedDict):
+    messages: Annotated[list, add_messages]
+    next: str
+
+# ----- 文档团队的主管节点 -----
+def document_supervisor(state: DocumentState):
+    """文档团队的主管：决定由谁执行"""
+    prompt = """你是一个文档编写团队的主管。
+    根据用户的需求，决定由哪位专家处理：
+    - "outline_writer": 需要先规划文档结构、写大纲时
+    - "content_writer": 已有大纲，需要填充具体内容时
+    只返回专家名称。
+    """
+    response = model.invoke([
+        {"role": "system", "content": prompt},
+        *state["messages"]
+    ])
+    next_agent = response.content.strip().lower()
+    if "outline" in next_agent:
+        return {"next": "outline_writer"}
+    else:
+        return {"next": "content_writer"}
+
+# ----- 文档团队的执行者 -----
+outline_agent = create_react_agent(
+    model=model,
+    tools=[write_file],
+    prompt="""你是一位大纲撰写专家。
+    根据用户的需求，先写出文档的大纲，然后使用 write_file 工具保存。
+    大纲应包含章节标题和要点。
+    """
+)
+
+content_agent = create_react_agent(
+    model=model,
+    tools=[read_file, write_file],
+    prompt="""你是一位内容撰写专家。
+    先使用 read_file 读取已有的大纲，然后根据大纲填充详细内容，
+    最后使用 write_file 保存完整的文档。
+    """
+)
+
+# ----- 构建文档子图 -----
+document_builder = StateGraph(DocumentState)
+document_builder.add_node("document_supervisor", document_supervisor)
+document_builder.add_node("outline_writer", outline_agent)
+document_builder.add_node("content_writer", content_agent)
+
+document_builder.add_edge(START, "document_supervisor")
+document_builder.add_conditional_edges(
+    "document_supervisor",
+    lambda state: state["next"],
+    {
+        "outline_writer": "outline_writer",
+        "content_writer": "content_writer",
+    }
+)
+document_builder.add_edge("outline_writer", END)
+document_builder.add_edge("content_writer", END)
+
+document_graph = document_builder.compile()
+```
+
+4. 组装顶层图
+
+顶层主管负责将任务分发给两个子团队。
+
+```python
+# ----- 顶层状态 -----
+class TopState(TypedDict):
+    messages: Annotated[list, add_messages]
+    next_team: str
+
+# ----- 顶层主管节点 -----
+def top_supervisor(state: TopState):
+    """顶层主管：决定交给哪个团队"""
+    prompt = """你是一个顶层主管，管理两个专业团队：
+    - "research_team": 负责信息搜索、数据分析、事实核查
+    - "document_team": 负责文档编写、大纲规划、内容创作
+    
+    根据用户的问题，选择最合适的团队。
+    只返回团队名称。
+    """
+    response = model.invoke([
+        {"role": "system", "content": prompt},
+        *state["messages"]
+    ])
+    next_team = response.content.strip().lower()
+    if "research" in next_team or "search" in next_team or "分析" in next_team:
+        return {"next_team": "research_team"}
+    elif "document" in next_team or "write" in next_team or "编写" in next_team or "文档" in next_team:
+        return {"next_team": "document_team"}
+    else:
+        # 默认交给研究团队
+        return {"next_team": "research_team"}
+
+# ----- 构建顶层图 -----
+top_builder = StateGraph(TopState)
+top_builder.add_node("top_supervisor", top_supervisor)
+# 将两个子图作为节点添加到顶层图中
+top_builder.add_node("research_team", research_graph)
+top_builder.add_node("document_team", document_graph)
+
+top_builder.add_edge(START, "top_supervisor")
+top_builder.add_conditional_edges(
+    "top_supervisor",
+    lambda state: state["next_team"],
+    {
+        "research_team": "research_team",
+        "document_team": "document_team",
+    }
+)
+top_builder.add_edge("research_team", END)
+top_builder.add_edge("document_team", END)
+
+# 编译整个系统
+app = top_builder.compile()
+```
+
+5. 运行示例
+
+```python
+# 示例 1: 研究类任务
+result = app.invoke({
+    "messages": [{"role": "user", "content": "帮我查一下 2025 年人工智能领域的主要发展趋势"}]
+})
+print("=" * 50)
+print("研究任务结果:")
+for msg in result["messages"]:
+    print(f"{msg.type}: {msg.content[:200]}...")
+
+# 示例 2: 文档编写类任务
+result2 = app.invoke({
+    "messages": [{"role": "user", "content": "帮我写一份关于 '远程办公的优缺点' 的简短报告"}]
+})
+print("=" * 50)
+print("文档编写任务结果:")
+for msg in result2["messages"]:
+    print(f"{msg.type}: {msg.content[:200]}...")
 ```
 
 
