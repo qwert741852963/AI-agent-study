@@ -2293,7 +2293,7 @@ print(result["messages"][-1].content)
 
 这个“生成 → 评估 → 优化 → 再评估”的循环会一直进行，直到输出满足预设的质量标准或达到最大迭代次数为止。
 
-### 🚀 典型应用场景
+**🚀 典型应用场景**
 
 *   **内容创作与润色**：文章、报告、邮件等的起草和优化。
 *   **代码生成与审查**：生成代码后，由评审（或工具如`Pyright`）检查错误，再自动修正，直到代码无误。
@@ -2491,6 +2491,8 @@ final_state = reflection_app.invoke({"messages": [HumanMessage(content=task)]})
 print("\n📄 最终代码:\n")
 print(final_state["messages"][-1].content)
 ```
+
+---
 
 
 
