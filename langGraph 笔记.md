@@ -2504,6 +2504,10 @@ print(final_state["messages"][-1].content)
 | **层级模式** | 多层级的“主管-执行者” | 可管理超大规模系统 | 设计复杂，有延迟 | 跨产品线、跨部门的大型企业级系统 |
 | **全连接网络** | 任意智能体直接通信 | 信息共享最充分 | 通信爆炸，不可扩展 | 仅适用于少量（<5个）智能体的高度协作场景 |
 
+**选择哪种模式：**
+
+<img width="1862" height="1304" alt="image" src="https://github.com/user-attachments/assets/72639bc3-ba4d-48e5-a48d-9a071ade09d9" />
+
 
 **1. 主管-执行者模式 (Supervisor-Workers)**
 
